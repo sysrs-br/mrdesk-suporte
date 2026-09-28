@@ -1,0 +1,12 @@
+# Segredos: NUNCA versionar. Use config.exemplo.py como modelo.
+config.py
+config.py.bak*
+*.bak*
+
+# Ambiente e arquivos gerados na VM
+venv/
+__pycache__/
+*.pyc
+
+# Exes de atualizacao (sobem via WinSCP direto na VM)
+updates/

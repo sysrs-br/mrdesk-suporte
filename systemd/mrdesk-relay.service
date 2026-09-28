@@ -1,0 +1,12 @@
+[Unit]
+Description=MrDesk - coleta sessoes do relay (hbbr) para o painel
+After=postgresql.service rustdesk-hbbr.service
+
+[Service]
+Type=oneshot
+User=sysrs
+# Permite ler o log do hbbr so neste servico (o usuario sysrs nao ganha isso no resto)
+SupplementaryGroups=systemd-journal
+WorkingDirectory=/opt/mrdesk-suporte
+StateDirectory=mrdesk-relay
+ExecStart=/opt/mrdesk-suporte/venv/bin/python /opt/mrdesk-suporte/coletar_relay.py

@@ -11,6 +11,9 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from functools import wraps
 from datetime import datetime, timedelta
 import os
+import sys
+import time
+import threading
 import config
 
 app = Flask(__name__)
@@ -480,8 +483,15 @@ def delete_usuario(usuario_id):
         conn.close()
         return jsonify({"success": False, "error": "Nao e permitido excluir o usuario administrador"}), 403
 
-    cur.execute("DELETE FROM usuarios WHERE usuario = %s AND admin <> 'S'", (usuario_id,))
-    conn.commit()
+    try:
+        cur.execute("DELETE FROM usuarios WHERE usuario = %s AND admin <> 'S'", (usuario_id,))
+        conn.commit()
+    except psycopg2.errors.ForeignKeyViolation:
+        # fk_tecnico_usuario: o usuario tem MrDeskPro em "Tecnicos autorizados".
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return jsonify({"success": False, "error": "Usuário com MrDeskPro cadastrado em Técnicos autorizados não pode ser excluído; desative-o."}), 409
     deleted = cur.rowcount
     cur.close()
     conn.close()
@@ -495,16 +505,25 @@ def delete_usuario(usuario_id):
 # ------------------------------------------------------------
 # CATALOGOS
 # ------------------------------------------------------------
+TAMANHO_NOME_CATALOGO = 10  # catalogos.nome e varchar(10)
+
 @app.route("/api/catalogos", methods=["GET"])
 @require_auth
 def list_catalogos():
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT catalogo, nome FROM catalogos ORDER BY catalogo")
+    cur.execute("SELECT catalogo, nome, senha_geral FROM catalogos ORDER BY catalogo")
     rows = cur.fetchall()
     cur.close()
     conn.close()
-    return jsonify({"success": True, "catalogos": [dict(r) for r in rows]})
+    catalogos = []
+    for r in rows:
+        catalogos.append({
+            "catalogo": int(r["catalogo"]),
+            "nome": r["nome"],
+            "senha_geral": "S" if r["senha_geral"] == "S" else "N",
+        })
+    return jsonify({"success": True, "catalogos": catalogos})
 
 
 @app.route("/api/catalogos", methods=["POST"])
@@ -514,6 +533,8 @@ def add_catalogo():
     nome = (data.get("nome") or "").strip()
     if not nome:
         return jsonify({"success": False, "error": "Nome obrigatorio"}), 400
+    if len(nome) > TAMANHO_NOME_CATALOGO:
+        return jsonify({"success": False, "error": f"O nome do catálogo tem no máximo {TAMANHO_NOME_CATALOGO} caracteres"}), 400
 
     conn = get_db()
     cur = conn.cursor()
@@ -524,6 +545,37 @@ def add_catalogo():
     cur.close()
     conn.close()
     return jsonify({"success": True, "catalogo": novo_id, "nome": nome})
+
+
+# EDITAR catalogo - so o admin. "senha_geral" = 'S' libera, nos dispositivos
+# desse catalogo, a senha geral do tecnico (item 6B, ainda nao implementado:
+# por enquanto o campo so fica gravado). Qualquer valor diferente de 'S' = nao.
+@app.route("/api/catalogos/<int:catalogo_id>", methods=["PUT"])
+@require_auth
+@require_admin
+def edit_catalogo(catalogo_id):
+    data = request.get_json() or {}
+    nome = (data.get("nome") or "").strip()
+    senha_geral = "S" if data.get("senha_geral") == "S" else "N"
+    if not nome:
+        return jsonify({"success": False, "error": "Nome obrigatorio"}), 400
+    if len(nome) > TAMANHO_NOME_CATALOGO:
+        return jsonify({"success": False, "error": f"O nome do catálogo tem no máximo {TAMANHO_NOME_CATALOGO} caracteres"}), 400
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE catalogos SET nome=%s, senha_geral=%s WHERE catalogo=%s",
+        (nome, senha_geral, catalogo_id)
+    )
+    conn.commit()
+    updated = cur.rowcount
+    cur.close()
+    conn.close()
+
+    if updated == 0:
+        return jsonify({"success": False, "error": "Catalogo nao encontrado"}), 404
+    return jsonify({"success": True})
 
 
 # ------------------------------------------------------------
@@ -748,7 +800,7 @@ def get_auditoria(device_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "SELECT sequencia, inicio, fim, nome, tipo, ip "
+        "SELECT sequencia, inicio, fim, nome, origem, tipo, ip, permissao "
         "FROM auditoria WHERE dispositivo = %s AND inicio >= %s AND inicio < %s "
         "ORDER BY inicio DESC",
         (device_id, data_inicio, data_fim)
@@ -769,6 +821,8 @@ def get_auditoria(device_id):
             "fim": row["fim"].isoformat() if row["fim"] else None,
             "duracao_segundos": duracao_segundos,
             "nome": row["nome"],
+            "origem": row["origem"],
+            "permissao": row["permissao"],
             "tipo": TIPOS_ACESSO_AUDITORIA.get(row["tipo"], "Desconhecido") if row["tipo"] is not None else None,
             "ip": row["ip"],
         })
@@ -886,8 +940,22 @@ def mover_catalogo(device_id):
 def delete_device(device_id):
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("DELETE FROM devices WHERE id = %s", (device_id,))
-    conn.commit()
+    try:
+        cur.execute("DELETE FROM devices WHERE id = %s", (device_id,))
+        conn.commit()
+    except psycopg2.errors.ForeignKeyViolation as e:
+        # fk_auditoria_device (tem historico) ou fk_tecnico_device (e o
+        # MrDeskPro de um tecnico). Excluir apagaria/"orfanaria" o historico e,
+        # se o heartbeat recriasse o device com o mesmo ID, ele herdaria o
+        # historico antigo. Por isso: desativar em vez de excluir.
+        conn.rollback()
+        cur.close()
+        conn.close()
+        if e.diag.constraint_name == "fk_tecnico_device":
+            erro = "Dispositivo cadastrado em Técnicos autorizados não pode ser excluído; desative-o."
+        else:
+            erro = "Dispositivo com histórico de conexões não pode ser excluído; desative-o."
+        return jsonify({"success": False, "error": erro}), 409
     deleted = cur.rowcount
     cur.close()
     conn.close()
@@ -982,6 +1050,193 @@ def sysinfo():
 
 
 # ------------------------------------------------------------
+# TECNICOS AUTORIZADOS (item 6A) - so o admin gerencia
+# ------------------------------------------------------------
+# Cada linha = um MrDeskPro (ID) de um tecnico (usuario do painel). O MrDesk
+# do cliente so aceita conexao de MrDeskPro cadastrado aqui, com a linha
+# ativa E o usuario dono ativo. Nao se exclui: desativa.
+# O ID precisa existir em devices (fk_tecnico_device) - o MrDeskPro entra em
+# devices sozinho pelo heartbeat, basta ter ficado on-line uma vez.
+TAMANHO_ID_DISPOSITIVO = 20  # padrao: tudo que representa device e varchar(20)
+
+
+def _normalizar_id(valor):
+    # IDs sao so numeros; aceita digitado com espacos ("207 575 694").
+    return "".join(str(valor or "").split())
+
+
+@app.route("/api/tecnicos", methods=["GET"])
+@require_auth
+@require_admin
+def list_tecnicos():
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "SELECT t.dispositivo, t.usuario, t.descricao, t.ativo, t.inclusao, t.alterado, "
+        "u.nome AS usuario_nome, u.ativo AS usuario_ativo, "
+        "d.ultima_vez_online "
+        "FROM tecnicos_autorizados t "
+        "JOIN usuarios u ON u.usuario = t.usuario "
+        "LEFT JOIN devices d ON d.id = t.dispositivo "
+        "ORDER BY u.nome, t.dispositivo"
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    tecnicos = []
+    for r in rows:
+        tecnicos.append({
+            "dispositivo": r["dispositivo"],
+            "usuario": r["usuario"],
+            "usuario_nome": r["usuario_nome"],
+            "usuario_ativo": "N" if r["usuario_ativo"] == "N" else "S",
+            "descricao": r["descricao"],
+            "ativo": "N" if r["ativo"] == "N" else "S",
+            "ultima_vez_online": r["ultima_vez_online"].isoformat() if r["ultima_vez_online"] else None,
+        })
+    return jsonify({"success": True, "tecnicos": tecnicos})
+
+
+def _dados_tecnico(data):
+    dispositivo = _normalizar_id(data.get("dispositivo"))
+    descricao = (data.get("descricao") or "").strip() or None
+    ativo = "N" if data.get("ativo") == "N" else "S"
+    try:
+        usuario = int(data.get("usuario"))
+    except (TypeError, ValueError):
+        usuario = None
+    if not dispositivo or usuario is None:
+        return None, "ID do MrDeskPro e técnico são obrigatórios"
+    if len(dispositivo) > TAMANHO_ID_DISPOSITIVO:
+        return None, f"O ID tem no máximo {TAMANHO_ID_DISPOSITIVO} caracteres"
+    if descricao and len(descricao) > 100:
+        return None, "A descrição tem no máximo 100 caracteres"
+    return (dispositivo, usuario, descricao, ativo), None
+
+
+def _erro_integridade_tecnico(e):
+    constraint = getattr(e.diag, "constraint_name", None)
+    if constraint == "fk_tecnico_device":
+        return "ID não encontrado nos dispositivos: o MrDeskPro precisa ter ficado on-line ao menos uma vez."
+    if constraint == "fk_tecnico_usuario":
+        return "Técnico (usuário) não encontrado."
+    if constraint == "pk_tecnicos_autorizados":
+        return "Esse ID já está cadastrado."
+    return "Não foi possível salvar."
+
+
+@app.route("/api/tecnicos", methods=["POST"])
+@require_auth
+@require_admin
+def add_tecnico():
+    dados, erro = _dados_tecnico(request.get_json() or {})
+    if erro:
+        return jsonify({"success": False, "error": erro}), 400
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO tecnicos_autorizados (dispositivo, usuario, descricao, ativo) "
+            "VALUES (%s, %s, %s, %s)",
+            dados
+        )
+        conn.commit()
+        return jsonify({"success": True})
+    except psycopg2.IntegrityError as e:
+        conn.rollback()
+        return jsonify({"success": False, "error": _erro_integridade_tecnico(e)}), 409
+    finally:
+        cur.close()
+        conn.close()
+
+
+# Editar (inclusive trocar o ID: e a chave, mas nada aponta pra essa tabela).
+@app.route("/api/tecnicos/<dispositivo_original>", methods=["PUT"])
+@require_auth
+@require_admin
+def edit_tecnico(dispositivo_original):
+    dados, erro = _dados_tecnico(request.get_json() or {})
+    if erro:
+        return jsonify({"success": False, "error": erro}), 400
+    dispositivo, usuario, descricao, ativo = dados
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE tecnicos_autorizados SET dispositivo=%s, usuario=%s, descricao=%s, "
+            "ativo=%s, alterado=NOW() WHERE dispositivo=%s",
+            (dispositivo, usuario, descricao, ativo, _normalizar_id(dispositivo_original))
+        )
+        conn.commit()
+        updated = cur.rowcount
+    except psycopg2.IntegrityError as e:
+        conn.rollback()
+        return jsonify({"success": False, "error": _erro_integridade_tecnico(e)}), 409
+    finally:
+        cur.close()
+        conn.close()
+
+    if updated == 0:
+        return jsonify({"success": False, "error": "Técnico não encontrado"}), 404
+    return jsonify({"success": True})
+
+
+# ------------------------------------------------------------
+# VERIFICAR TECNICO - consultado pelo MrDesk do cliente (sem login)
+# ------------------------------------------------------------
+# O MrDesk (patch no RustDesk) pergunta, antes de validar a senha, se o
+# MrDeskPro que esta conectando e autorizado:
+#   POST {"id": <ID do MrDesk>, "peer": <ID de quem conecta>}
+#   -> {"autorizado": true|false}
+# Responde so sim/nao pro ID perguntado, nunca a lista. Limite de consultas
+# por IP (em memoria, por worker do gunicorn) pra dificultar varredura.
+# Qualquer resposta que nao seja HTTP 200 com {"autorizado": ...} o MrDesk
+# trata como "servidor fora" (usa o cache de 48h, se tiver).
+LIMITE_VERIFICACOES_POR_MINUTO = 60
+_verificacoes_por_ip = {}
+_verificacoes_lock = threading.Lock()
+
+
+def _excedeu_limite_verificacao(ip):
+    agora = time.time()
+    with _verificacoes_lock:
+        janela = [t for t in _verificacoes_por_ip.get(ip, []) if agora - t < 60]
+        janela.append(agora)
+        _verificacoes_por_ip[ip] = janela
+        if len(_verificacoes_por_ip) > 10000:  # nao deixa crescer sem fim
+            for chave in [k for k, v in _verificacoes_por_ip.items() if not v or agora - v[-1] >= 60]:
+                del _verificacoes_por_ip[chave]
+        return len(janela) > LIMITE_VERIFICACOES_POR_MINUTO
+
+
+@app.route("/api/tecnicos/verificar", methods=["POST"])
+def verificar_tecnico():
+    ip = request.headers.get("X-Real-IP") or request.remote_addr or "?"
+    if _excedeu_limite_verificacao(ip):
+        return jsonify({"autorizado": False, "motivo": "limite"}), 429
+
+    data = request.get_json(force=True, silent=True) or {}
+    peer = _normalizar_id(data.get("peer"))
+    if not peer or len(peer) > TAMANHO_ID_DISPOSITIVO:
+        return jsonify({"autorizado": False})
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM tecnicos_autorizados t JOIN usuarios u ON u.usuario = t.usuario "
+        "WHERE t.dispositivo = %s AND t.ativo = 'S' AND u.ativo = 'S'",
+        (peer,)
+    )
+    autorizado = cur.fetchone() is not None
+    cur.close()
+    conn.close()
+    return jsonify({"autorizado": autorizado})
+
+
+# ------------------------------------------------------------
 # AUDITORIA de conexoes (RustDesk /api/audit/conn)
 # ------------------------------------------------------------
 # O client manda ate 3 POSTs por sessao de conexao remota:
@@ -1020,6 +1275,12 @@ def audit_conn():
     action = data.get("action")
     ip = data.get("ip") if action == "new" else None
     uuid_val = data.get("uuid")
+    # Controle de acesso (item 6A): o MrDesk com o patch manda "permissao"
+    # (P = permitida, B = bloqueada, F = falha na verificacao). Clientes sem o
+    # patch nao mandam: fica o default da coluna ('P' - nao havia controle).
+    permissao = data.get("permissao")
+    if permissao not in ("P", "B", "F"):
+        permissao = None
 
     origem = None
     nome = None
@@ -1036,24 +1297,38 @@ def audit_conn():
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO auditoria (dispositivo, conexao, sessao, ip, origem, nome, tipo, uuid, inicio, fim)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), CASE WHEN %s THEN NOW() ELSE NULL END)
-        ON CONFLICT (dispositivo, conexao) DO UPDATE SET
-            sessao = COALESCE(EXCLUDED.sessao, auditoria.sessao),
-            ip     = COALESCE(EXCLUDED.ip, auditoria.ip),
-            origem = COALESCE(EXCLUDED.origem, auditoria.origem),
-            nome   = COALESCE(EXCLUDED.nome, auditoria.nome),
-            tipo   = COALESCE(EXCLUDED.tipo, auditoria.tipo),
-            uuid   = COALESCE(EXCLUDED.uuid, auditoria.uuid),
-            fim    = COALESCE(EXCLUDED.fim, auditoria.fim)
-        """,
-        (str(dispositivo), conexao, str(sessao), ip, origem, nome, tipo, uuid_val, is_close)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            """
+            INSERT INTO auditoria (dispositivo, conexao, sessao, ip, origem, nome, tipo, uuid, inicio, fim, permissao)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), CASE WHEN %s THEN NOW() ELSE NULL END, COALESCE(%s, 'P'))
+            ON CONFLICT (dispositivo, conexao) DO UPDATE SET
+                sessao    = COALESCE(EXCLUDED.sessao, auditoria.sessao),
+                ip        = COALESCE(EXCLUDED.ip, auditoria.ip),
+                origem    = COALESCE(EXCLUDED.origem, auditoria.origem),
+                nome      = COALESCE(EXCLUDED.nome, auditoria.nome),
+                tipo      = COALESCE(EXCLUDED.tipo, auditoria.tipo),
+                uuid      = COALESCE(EXCLUDED.uuid, auditoria.uuid),
+                fim       = COALESCE(EXCLUDED.fim, auditoria.fim),
+                permissao = COALESCE(%s, auditoria.permissao)
+            """,
+            (str(dispositivo)[:20], conexao, str(sessao), ip,
+             str(origem)[:20] if origem is not None else None,
+             nome, tipo, uuid_val, is_close, permissao, permissao)
+        )
+        conn.commit()
+    except psycopg2.errors.ForeignKeyViolation:
+        # fk_auditoria_device: o dispositivo nao existe em devices (quase
+        # impossivel - o heartbeat cria o device assim que o servico inicia).
+        # Fica sem auditoria, mas registra no log do servico
+        # (journalctl -u mrdesk-suporte). A resposta continua vazia/200,
+        # senao o client reenvia o mesmo evento sem parar.
+        conn.rollback()
+        print(f"auditoria ignorada: dispositivo {dispositivo} nao existe em devices "
+              f"(conexao {conexao})", file=sys.stderr, flush=True)
+    finally:
+        cur.close()
+        conn.close()
 
     return ("", 200)
 

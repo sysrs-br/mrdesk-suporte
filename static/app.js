@@ -8,6 +8,7 @@ let catalogos = [];
 let catalogoAtual = null;
 let idParaMover = null;
 let usuarios = [];
+let tecnicos = [];
 
 const ICONE_ARQUIVOS = '<svg class="icon" viewBox="0 0 24 24"><path d="M4 8h13M13 5l4 3-4 3"/><path d="M20 16H7M11 13l-4 3 4 3"/></svg>';
 const ICONE_CONECTAR = '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h7M12 9l3 3-3 3"/></svg>';
@@ -65,6 +66,7 @@ function mostrarApp() {
   document.getElementById("app").style.display = "block";
   document.getElementById("nome-usuario").textContent = nomeUsuario;
   document.getElementById("btn-gerenciar-usuarios").style.display = usuarioAdmin ? "flex" : "none";
+  document.getElementById("btn-tecnicos-autorizados").style.display = usuarioAdmin ? "flex" : "none";
   document.getElementById("separador-menu-usuario").style.display = usuarioAdmin ? "block" : "none";
   document.getElementById("btn-menu-excluir-dispositivo").style.display = (usuarioAdmin || usuarioExcluirDevice) ? "flex" : "none";
   carregarCatalogos();
@@ -232,6 +234,11 @@ document.getElementById("btn-gerenciar-usuarios").addEventListener("click", () =
   abrirModalUsuarios();
 });
 
+document.getElementById("btn-tecnicos-autorizados").addEventListener("click", () => {
+  document.getElementById("menu-usuario-lista").classList.remove("aberto");
+  abrirModalTecnicos();
+});
+
 document.getElementById("btn-alterar-senha").addEventListener("click", () => {
   document.getElementById("menu-usuario-lista").classList.remove("aberto");
   abrirModalAlterarSenha();
@@ -293,6 +300,10 @@ async function carregarCatalogos() {
     if (resp.status === 401) { mostrarLogin(); return; }
     const data = await resp.json();
     catalogos = data.catalogos || [];
+    // Mantem o catalogo selecionado, mas com os dados atualizados (ex.: depois de editar)
+    if (catalogoAtual) {
+      catalogoAtual = catalogos.find(c => String(c.catalogo) === String(catalogoAtual.catalogo)) || null;
+    }
     if (!catalogoAtual && catalogos.length > 0) {
       const salvo = localStorage.getItem("mrdesk_catalogo");
       catalogoAtual = catalogos.find(c => String(c.catalogo) === salvo) || catalogos[0];
@@ -362,7 +373,58 @@ function renderizarComboCatalogos() {
     }
   });
   lista.appendChild(novo);
+
+  // Editar o catalogo selecionado (nome e senha geral do tecnico) - so o admin
+  if (usuarioAdmin && catalogoAtual) {
+    const editar = document.createElement("div");
+    editar.className = "combo-catalogo-item combo-catalogo-especial";
+    editar.innerHTML = `${ICONE_EDITAR}<span>Editar catálogo</span>`;
+    editar.addEventListener("click", () => {
+      document.getElementById("combo-catalogo-lista").classList.remove("aberto");
+      abrirModalCatalogo(catalogoAtual);
+    });
+    lista.appendChild(editar);
+  }
 }
+
+// ---- Editar catálogo (só admin) ----
+function abrirModalCatalogo(cat) {
+  document.getElementById("erro-modal-catalogo").style.display = "none";
+  document.getElementById("catalogo-id").value = cat.catalogo;
+  document.getElementById("catalogo-nome").value = cat.nome || "";
+  document.getElementById("catalogo-senha-geral").checked = cat.senha_geral === "S";
+  document.getElementById("overlay-form-catalogo").style.display = "flex";
+}
+
+function fecharModalCatalogo() {
+  document.getElementById("overlay-form-catalogo").style.display = "none";
+}
+document.getElementById("btn-cancelar-form-catalogo").addEventListener("click", fecharModalCatalogo);
+
+document.getElementById("form-catalogo").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("catalogo-id").value;
+  const nome = document.getElementById("catalogo-nome").value.trim();
+  const senha_geral = document.getElementById("catalogo-senha-geral").checked ? "S" : "N";
+  const erroEl = document.getElementById("erro-modal-catalogo");
+  erroEl.style.display = "none";
+  try {
+    const resp = await fetch(`${API}/catalogos/${id}`, {
+      method: "PUT", headers: headersAuth(), body: JSON.stringify({ nome, senha_geral })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      fecharModalCatalogo();
+      await carregarCatalogos();
+    } else {
+      erroEl.textContent = data.error || "Erro ao salvar.";
+      erroEl.style.display = "block";
+    }
+  } catch (err) {
+    erroEl.textContent = "Erro de conexão: " + err.message;
+    erroEl.style.display = "block";
+  }
+});
 
 document.getElementById("combo-catalogo-btn").addEventListener("click", (e) => {
   e.stopPropagation();
@@ -727,6 +789,9 @@ document.getElementById("btn-cancelar-mover").addEventListener("click", fecharMo
 
 let idParaAuditoria = null;
 
+// Coluna "permissao" da auditoria (controle de acesso - item 6A)
+const TEXTO_PERMISSAO = { P: "Permitida", B: "Bloqueada", F: "Falha na verificação" };
+
 function formatarDataHora(isoString) {
   if (!isoString) return "-";
   const d = new Date(isoString);
@@ -756,7 +821,7 @@ async function carregarAuditoria() {
   const inicio = document.getElementById("auditoria-data-inicio").value;
   const fim = document.getElementById("auditoria-data-fim").value;
   const corpo = document.getElementById("corpo-tabela-auditoria");
-  corpo.innerHTML = "<tr><td colspan=\"5\">Carregando...</td></tr>";
+  corpo.innerHTML = "<tr><td colspan=\"7\">Carregando...</td></tr>";
 
   try {
     const resp = await fetch(
@@ -767,12 +832,12 @@ async function carregarAuditoria() {
     const data = await resp.json();
 
     if (!data.success) {
-      corpo.innerHTML = `<tr><td colspan="5">Erro ao carregar: ${data.error || ""}</td></tr>`;
+      corpo.innerHTML = `<tr><td colspan="7">Erro ao carregar: ${data.error || ""}</td></tr>`;
       return;
     }
 
     if (data.registros.length === 0) {
-      corpo.innerHTML = "<tr><td colspan=\"5\">Nenhuma conexão encontrada no período.</td></tr>";
+      corpo.innerHTML = "<tr><td colspan=\"7\">Nenhuma conexão encontrada no período.</td></tr>";
       return;
     }
 
@@ -782,14 +847,16 @@ async function carregarAuditoria() {
       tr.innerHTML = `
         <td>${formatarDataHora(r.inicio)}</td>
         <td>${formatarDuracao(r.duracao_segundos)}</td>
-        <td>${r.nome || "-"}</td>
+        <td>${escapeHtml(r.nome || "-")}</td>
+        <td style="text-align:right;">${r.origem ? formatarId(r.origem) : "-"}</td>
         <td>${r.tipo || "-"}</td>
+        <td class="permissao-${r.permissao || ""}">${TEXTO_PERMISSAO[r.permissao] || "-"}</td>
         <td>${r.ip || "-"}</td>
       `;
       corpo.appendChild(tr);
     });
   } catch (err) {
-    corpo.innerHTML = `<tr><td colspan="5">Erro ao carregar: ${err.message}</td></tr>`;
+    corpo.innerHTML = `<tr><td colspan="7">Erro ao carregar: ${err.message}</td></tr>`;
   }
 }
 
@@ -1031,6 +1098,157 @@ document.getElementById("form-usuario").addEventListener("submit", async (e) => 
     if (data.success) {
       fecharModalUsuario();
       carregarUsuarios();
+    } else {
+      erroEl.textContent = data.error || "Erro ao salvar.";
+      erroEl.style.display = "block";
+    }
+  } catch (err) {
+    erroEl.textContent = "Erro de conexão: " + err.message;
+    erroEl.style.display = "block";
+  }
+});
+
+
+// ---- Técnicos autorizados (item 6A - só admin) ----
+
+function abrirModalTecnicos() {
+  document.getElementById("overlay-tecnicos").style.display = "flex";
+  carregarTecnicos();
+}
+
+function fecharModalTecnicos() {
+  document.getElementById("overlay-tecnicos").style.display = "none";
+}
+document.getElementById("btn-fechar-tecnicos").addEventListener("click", fecharModalTecnicos);
+
+async function carregarTecnicos() {
+  const erroEl = document.getElementById("erro-lista-tecnicos");
+  erroEl.style.display = "none";
+  try {
+    const resp = await fetch(`${API}/tecnicos`, { headers: headersAuth() });
+    if (resp.status === 401) { mostrarLogin(); return; }
+    const data = await resp.json();
+    if (!data.success) {
+      erroEl.textContent = data.error || "Erro ao carregar técnicos.";
+      erroEl.style.display = "block";
+      return;
+    }
+    tecnicos = data.tecnicos || [];
+    renderizarTabelaTecnicos();
+  } catch (err) {
+    erroEl.textContent = "Erro ao carregar técnicos: " + err.message;
+    erroEl.style.display = "block";
+  }
+}
+
+function renderizarTabelaTecnicos() {
+  const corpo = document.getElementById("corpo-tabela-tecnicos");
+  corpo.innerHTML = "";
+  if (tecnicos.length === 0) {
+    corpo.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--texto-secundario);">Nenhum MrDeskPro cadastrado.</td></tr>';
+    return;
+  }
+  tecnicos.forEach(t => {
+    // Autorizado de fato = linha ativa E usuario dono ativo
+    const autorizado = t.ativo === "S" && t.usuario_ativo === "S";
+    const opacidade = autorizado ? "" : "opacity:0.5;";
+    const textoAtivo = t.ativo !== "S" ? "Não" : (t.usuario_ativo !== "S" ? "Não (usuário inativo)" : "Sim");
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="${opacidade}">${escapeHtml(t.usuario_nome)}</td>
+      <td style="${opacidade}text-align:right;font-family:monospace;">${formatarId(t.dispositivo)}</td>
+      <td style="${opacidade}">${escapeHtml(t.descricao || "—")}</td>
+      <td class="centralizado" style="${opacidade}">${t.ultima_vez_online ? formatarDataHora(t.ultima_vez_online) : "—"}</td>
+      <td class="centralizado" style="${opacidade}"><span class="${autorizado ? 'badge-sim' : 'badge-nao'}">${textoAtivo}</span></td>
+      <td class="acoes-linha">
+        <button title="Editar" data-acao="editar-tecnico" data-id="${escapeHtml(t.dispositivo)}">${ICONE_EDITAR}</button>
+      </td>`;
+    corpo.appendChild(tr);
+  });
+}
+
+document.getElementById("corpo-tabela-tecnicos").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn || btn.dataset.acao !== "editar-tecnico") return;
+  const t = tecnicos.find(x => x.dispositivo === btn.dataset.id);
+  if (t) abrirModalTecnico(t);
+});
+
+document.getElementById("btn-novo-tecnico").addEventListener("click", () => abrirModalTecnico(null));
+
+async function preencherComboTecnicos(usuarioSelecionado) {
+  const combo = document.getElementById("tecnico-usuario");
+  combo.innerHTML = "";
+  try {
+    const resp = await fetch(`${API}/usuarios`, { headers: headersAuth() });
+    const data = await resp.json();
+    const lista = (data.usuarios || []).filter(u => u.ativo !== "N" || String(u.usuario) === String(usuarioSelecionado));
+    const vazio = document.createElement("option");
+    vazio.value = "";
+    vazio.textContent = "Selecione...";
+    combo.appendChild(vazio);
+    lista.forEach(u => {
+      const opt = document.createElement("option");
+      opt.value = u.usuario;
+      opt.textContent = u.nome + (u.ativo === "N" ? " (inativo)" : "");
+      combo.appendChild(opt);
+    });
+    combo.value = usuarioSelecionado != null ? String(usuarioSelecionado) : "";
+  } catch (err) {
+    const erroEl = document.getElementById("erro-modal-tecnico");
+    erroEl.textContent = "Erro ao carregar usuários: " + err.message;
+    erroEl.style.display = "block";
+  }
+}
+
+function abrirModalTecnico(t) {
+  document.getElementById("erro-modal-tecnico").style.display = "none";
+  document.getElementById("form-tecnico").reset();
+  if (t) {
+    document.getElementById("titulo-modal-tecnico").textContent = "Editar MrDeskPro";
+    document.getElementById("tecnico-dispositivo-original").value = t.dispositivo;
+    document.getElementById("tecnico-dispositivo").value = formatarId(t.dispositivo);
+    document.getElementById("tecnico-descricao").value = t.descricao || "";
+    document.getElementById("tecnico-ativo").checked = t.ativo === "S";
+  } else {
+    document.getElementById("titulo-modal-tecnico").textContent = "Novo MrDeskPro";
+    document.getElementById("tecnico-dispositivo-original").value = "";
+    document.getElementById("tecnico-ativo").checked = true;
+  }
+  preencherComboTecnicos(t ? t.usuario : null);
+  document.getElementById("overlay-form-tecnico").style.display = "flex";
+}
+
+function fecharModalTecnico() {
+  document.getElementById("overlay-form-tecnico").style.display = "none";
+}
+document.getElementById("btn-cancelar-form-tecnico").addEventListener("click", fecharModalTecnico);
+
+document.getElementById("form-tecnico").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const original = document.getElementById("tecnico-dispositivo-original").value;
+  const dispositivo = document.getElementById("tecnico-dispositivo").value.replace(/\s/g, "");
+  const usuario = document.getElementById("tecnico-usuario").value;
+  const descricao = document.getElementById("tecnico-descricao").value.trim();
+  const ativo = document.getElementById("tecnico-ativo").checked ? "S" : "N";
+  const erroEl = document.getElementById("erro-modal-tecnico");
+  erroEl.style.display = "none";
+
+  if (!usuario) {
+    erroEl.textContent = "Selecione o técnico.";
+    erroEl.style.display = "block";
+    return;
+  }
+
+  const corpo = { dispositivo, usuario: Number(usuario), descricao, ativo };
+  try {
+    const resp = await fetch(original ? `${API}/tecnicos/${encodeURIComponent(original)}` : `${API}/tecnicos`, {
+      method: original ? "PUT" : "POST", headers: headersAuth(), body: JSON.stringify(corpo)
+    });
+    const data = await resp.json();
+    if (data.success) {
+      fecharModalTecnico();
+      carregarTecnicos();
     } else {
       erroEl.textContent = data.error || "Erro ao salvar.";
       erroEl.style.display = "block";

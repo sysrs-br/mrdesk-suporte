@@ -663,6 +663,9 @@ async function conectar(id, modo) {
     const data = await resp.json();
     if (data.success) {
       window.location.href = data.link;
+      // Atualiza a lista (bolinhas on-line/off-line) a cada conexao, sem
+      // ficar recarregando sozinha o tempo todo (pedido do Celso, 30/09)
+      setTimeout(carregarDispositivos, 1500);
     } else {
       alert("Erro ao gerar link: " + data.error);
     }

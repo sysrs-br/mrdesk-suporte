@@ -608,7 +608,10 @@ def list_devices():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
         f"SELECT id, cliente, apelido, observacao, usuario, ativo, servidor, catalogo, "
-        f"ultima_vez_online, inclusao, atualizado "
+        f"ultima_vez_online, inclusao, atualizado, "
+        # tempo sem sinal calculado DENTRO do banco (mesmo relogio que gravou
+        # ultima_vez_online) - nao depende do relogio/fuso do Python
+        f"EXTRACT(EPOCH FROM (NOW() - ultima_vez_online)) AS segundos_sem_sinal "
         f"FROM devices WHERE {where_sql} ORDER BY cliente, apelido",
         parametros
     )
@@ -624,10 +627,8 @@ def list_devices():
     for row in rows:
         ultima = row["ultima_vez_online"]
         online = None
-        if ultima:
-            from datetime import datetime as dt
-            segundos = (dt.now() - ultima).total_seconds()
-            online = segundos <= LIMITE_ONLINE_SEGUNDOS
+        if row["segundos_sem_sinal"] is not None:
+            online = float(row["segundos_sem_sinal"]) <= LIMITE_ONLINE_SEGUNDOS
 
         devices.append({
             "id": row["id"],

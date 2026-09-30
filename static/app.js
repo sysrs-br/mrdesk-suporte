@@ -851,7 +851,7 @@ async function carregarAuditoria() {
         <td style="text-align:right;">${r.origem ? formatarId(r.origem) : "-"}</td>
         <td>${r.tipo || "-"}</td>
         <td class="permissao-${r.permissao || ""}">${TEXTO_PERMISSAO[r.permissao] || "-"}</td>
-        <td>${r.ip || "-"}</td>
+        <td class="col-ip">${r.ip || "-"}</td>
       `;
       corpo.appendChild(tr);
     });

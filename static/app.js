@@ -63,7 +63,7 @@ function calcularTempoDecorrido(str, online) {
 
 function mostrarApp() {
   document.getElementById("tela-login").style.display = "none";
-  document.getElementById("app").style.display = "block";
+  document.getElementById("app").style.display = "flex";
   document.getElementById("nome-usuario").textContent = nomeUsuario;
   document.getElementById("btn-gerenciar-usuarios").style.display = usuarioAdmin ? "flex" : "none";
   document.getElementById("btn-tecnicos-autorizados").style.display = usuarioAdmin ? "flex" : "none";
@@ -715,6 +715,10 @@ document.getElementById("corpo-tabela").addEventListener("click", async (e) => {
     return;
   }
 });
+
+// A lista rola dentro da propria caixa: fecha o menu de acoes ao rolar,
+// senao ele ficaria parado longe da linha
+document.querySelector("main > .tabela-wrapper").addEventListener("scroll", () => fecharMenuFlutuante());
 
 function fecharMenuFlutuante() {
   document.getElementById("menu-flutuante").style.display = "none";

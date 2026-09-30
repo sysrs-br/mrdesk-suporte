@@ -73,6 +73,16 @@
   .combo-catalogo-especial { color: var(--azul); font-weight: 500; }
 
   main { max-width: none; margin: 24px 0; padding: 0 24px; }
+
+  /* Tela de dispositivos: cabecalho, filtros e cabecalho da tabela ficam
+     parados; so a lista de dispositivos rola (pedido do Celso, 30/09). */
+  #app { height: 100vh; flex-direction: column; }
+  #app > header { flex-shrink: 0; }
+  #app > main { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; padding: 24px 24px 12px; }
+  #app > main > .barra-acoes { flex-shrink: 0; }
+  #app > main > .tabela-wrapper { flex: 1 1 auto; min-height: 0; overflow: auto; max-height: max-content; }
+  #app > main > .tabela-wrapper thead th { position: sticky; top: 0; z-index: 5; box-shadow: inset 0 -1px 0 var(--cinza-borda); }
+  #app > main > #contador, #app > main > #sem-resultados { flex-shrink: 0; }
   .barra-acoes { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
   .busca-wrapper { position: relative; flex: 1; min-width: 180px; }
   .busca-wrapper input[type="text"] {

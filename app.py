@@ -611,7 +611,8 @@ def list_devices():
         f"ultima_vez_online, inclusao, atualizado, "
         # tempo sem sinal calculado DENTRO do banco (mesmo relogio que gravou
         # ultima_vez_online) - nao depende do relogio/fuso do Python
-        f"EXTRACT(EPOCH FROM (NOW() - ultima_vez_online)) AS segundos_sem_sinal "
+        f"EXTRACT(EPOCH FROM (NOW() - ultima_vez_online)) AS segundos_sem_sinal, "
+        f"EXTRACT(EPOCH FROM (NOW() - ultima_atividade)) AS segundos_sem_uso "
         f"FROM devices WHERE {where_sql} ORDER BY cliente, apelido",
         parametros
     )
@@ -639,6 +640,8 @@ def list_devices():
             "ativo": row["ativo"],
             "servidor": row["servidor"],
             "online": online,
+            # item 16: ha quanto tempo ninguem mexe no teclado/mouse (None = sem o dado)
+            "segundos_sem_uso": int(row["segundos_sem_uso"]) if row["segundos_sem_uso"] is not None else None,
             "ultima_vez_online": ultima.isoformat() if ultima else None,
             "inclusao": row["inclusao"].isoformat() if row["inclusao"] else None,
             "atualizado": row["atualizado"].isoformat() if row["atualizado"] else None
@@ -980,11 +983,29 @@ def heartbeat():
     if not device_id:
         return jsonify({})
 
+    # Item 16: o MrDesk com o patch manda ha quantos segundos o teclado/mouse
+    # estao parados ("mrdesk_ocioso"). Guardamos a hora da ultima atividade.
+    # Sem o campo (MrDesk sem o patch), ultima_atividade nao muda.
+    ocioso = data.get("mrdesk_ocioso")
+    try:
+        ocioso = int(ocioso) if ocioso is not None else None
+        if ocioso is not None and not (0 <= ocioso <= 60 * 60 * 24 * 365):
+            ocioso = None
+    except (TypeError, ValueError):
+        ocioso = None
+
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT id FROM devices WHERE id = %s", (device_id,))
     if cur.fetchone():
-        cur.execute("UPDATE devices SET ultima_vez_online = NOW() WHERE id = %s", (device_id,))
+        if ocioso is None:
+            cur.execute("UPDATE devices SET ultima_vez_online = NOW() WHERE id = %s", (device_id,))
+        else:
+            cur.execute(
+                "UPDATE devices SET ultima_vez_online = NOW(), "
+                "ultima_atividade = NOW() - make_interval(secs => %s) WHERE id = %s",
+                (ocioso, device_id)
+            )
     else:
         # Dispositivo desconhecido: cria um registro minimo.
         # O /api/sysinfo (que chega poucos minutos depois) completa

@@ -61,6 +61,18 @@ function calcularTempoDecorrido(str, online) {
   return `há ${dias} dia${dias > 1 ? "s" : ""} ${horasRestantes}h`;
 }
 
+// Item 16: "sem uso há X" quando ninguem mexe no teclado/mouse ha 3 min ou mais
+const SEM_USO_A_PARTIR_DE_SEGUNDOS = 180;
+function textoSemUso(segundos) {
+  if (segundos === null || segundos === undefined || segundos < SEM_USO_A_PARTIR_DE_SEGUNDOS) return "";
+  const min = Math.floor(segundos / 60);
+  if (min < 60) return `sem uso há ${min} min`;
+  const horas = Math.floor(min / 60);
+  if (horas < 24) return `sem uso há ${horas}h ${min % 60}min`;
+  const dias = Math.floor(horas / 24);
+  return `sem uso há ${dias} dia${dias > 1 ? "s" : ""} ${horas % 24}h`;
+}
+
 function mostrarApp() {
   document.getElementById("tela-login").style.display = "none";
   document.getElementById("app").style.display = "flex";
@@ -503,7 +515,9 @@ function renderizarTabela() {
     if (d.online === true) statusClasse = "online";
     else if (d.online === false) statusClasse = "offline";
 
-    const tempoDecorrido = calcularTempoDecorrido(d.ultima_vez_online, d.online);
+    // Off-line: ha quanto tempo esta off-line. On-line: so mostra algo se estiver
+    // sem uso de teclado/mouse ha 3 min ou mais (item 16).
+    const tempoDecorrido = d.online ? textoSemUso(d.segundos_sem_uso) : calcularTempoDecorrido(d.ultima_vez_online, d.online);
 
     tr.innerHTML = `
       <td class="col-status-conectar" style="${opacidadeConteudo}">

@@ -259,6 +259,38 @@ def disco():
         return jsonify({"success": False, "error": "Nao foi possivel ler o espaco em disco"}), 500
 
 
+# ------------------------------------------------------------
+# MEMORIA DA VM (pizza no cabecalho, depois da do disco)
+# ------------------------------------------------------------
+# Le /proc/meminfo. "Usada" = MemTotal - MemAvailable (o mesmo que a coluna
+# "used"/"available" do comando free: cache do sistema que pode ser liberado
+# nao conta como usado).
+@app.route("/api/memoria", methods=["GET"])
+@require_auth
+def memoria():
+    try:
+        valores = {}
+        with open("/proc/meminfo") as f:
+            for linha in f:
+                nome, _, resto = linha.partition(":")
+                partes = resto.split()
+                if partes:
+                    valores[nome.strip()] = int(partes[0]) * 1024  # kB -> bytes
+        total_bytes = valores["MemTotal"]
+        disponivel_bytes = valores.get("MemAvailable", valores.get("MemFree", 0))
+        usado_bytes = total_bytes - disponivel_bytes
+        percentual = round(usado_bytes * 100 / total_bytes, 1) if total_bytes else 0
+        return jsonify({
+            "success": True,
+            "total_bytes": total_bytes,
+            "usado_bytes": usado_bytes,
+            "percentual": percentual,
+        })
+    except Exception as e:
+        app.logger.error("Falha ao ler a memoria: %s", e)
+        return jsonify({"success": False, "error": "Nao foi possivel ler a memoria"}), 500
+
+
 def get_db():
     return psycopg2.connect(
         host=config.DB_HOST,

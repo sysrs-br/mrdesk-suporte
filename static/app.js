@@ -125,6 +125,8 @@ async function carregarTrafego() {
       (pct, d) => `${formatarPct(pct)}% já utilizado do tráfego de saída de 10Tb no mês (${formatarGB(d.saida_bytes)}Gb usados)`),
     atualizarPizza("grafico-disco", "disco",
       (pct, d) => `${formatarPct(pct)}% já utilizado do disco de ${formatarGB(d.total_bytes)}Gb (${formatarGB(d.usado_bytes)}Gb usados)`),
+    atualizarPizza("grafico-memoria", "memoria",
+      (pct, d) => `${formatarPct(pct)}% já utilizado da memória de ${formatarGB(d.total_bytes)}Gb (${formatarGB(d.usado_bytes)}Gb usados)`),
     atualizarPizza("grafico-relay", "relay",
       (pct, d) => {
         // Período: últimos 30 dias, ou desde a primeira conexão auditada se

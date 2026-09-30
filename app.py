@@ -1216,7 +1216,7 @@ def edit_tecnico(dispositivo_original):
 # Responde so sim/nao pro ID perguntado, nunca a lista. Limite de consultas
 # por IP (em memoria, por worker do gunicorn) pra dificultar varredura.
 # Qualquer resposta que nao seja HTTP 200 com {"autorizado": ...} o MrDesk
-# trata como "servidor fora" (usa o cache de 48h, se tiver).
+# trata como "servidor fora" (usa o cache de 72h, se tiver).
 LIMITE_VERIFICACOES_POR_MINUTO = 60
 _verificacoes_por_ip = {}
 _verificacoes_lock = threading.Lock()
@@ -1238,7 +1238,9 @@ def _excedeu_limite_verificacao(ip):
 def verificar_tecnico():
     ip = request.headers.get("X-Real-IP") or request.remote_addr or "?"
     if _excedeu_limite_verificacao(ip):
-        return jsonify({"autorizado": False, "motivo": "limite"}), 429
+        # sem a chave "autorizado": o MrDesk trata como "sem resposta" (usa o cache),
+        # e nao como bloqueio
+        return jsonify({"motivo": "limite"}), 429
 
     data = request.get_json(force=True, silent=True) or {}
     peer = _normalizar_id(data.get("peer"))

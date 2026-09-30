@@ -93,6 +93,10 @@ function formatarPct(pct) {
   return pct.toLocaleString("pt-BR", { maximumFractionDigits: 2 });
 }
 
+function formatarMB(bytes) {
+  // Mesma unidade do "free -m" (MiB); usado na pizza da memoria (VM tem pouca memoria)
+  return Math.round(bytes / 1024 ** 2).toLocaleString("pt-BR");
+}
 function formatarGB(bytes) {
   // Mesma unidade do "df -h" (GiB), pra bater com o que aparece no servidor.
   return (bytes / 1024 ** 3).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
@@ -126,7 +130,7 @@ async function carregarTrafego() {
     atualizarPizza("grafico-disco", "disco",
       (pct, d) => `${formatarPct(pct)}% já utilizado do disco de ${formatarGB(d.total_bytes)}Gb (${formatarGB(d.usado_bytes)}Gb usados)`),
     atualizarPizza("grafico-memoria", "memoria",
-      (pct, d) => `${formatarPct(pct)}% já utilizado da memória de ${formatarGB(d.total_bytes)}Gb (${formatarGB(d.usado_bytes)}Gb usados)`),
+      (pct, d) => `${formatarPct(pct)}% já utilizado da memória de ${formatarMB(d.total_bytes)}Mb (${formatarMB(d.usado_bytes)}Mb usados)`),
     atualizarPizza("grafico-relay", "relay",
       (pct, d) => {
         // Período: últimos 30 dias, ou desde a primeira conexão auditada se

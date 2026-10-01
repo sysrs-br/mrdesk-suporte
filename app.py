@@ -1311,6 +1311,44 @@ def verificar_tecnico():
 
 
 # ------------------------------------------------------------
+# LISTA DE TECNICOS PRO CACHE DO MRDESK (item 23) - sem login
+# ------------------------------------------------------------
+# O MrDesk baixa 1x por dia (e a cada acesso) a lista de tecnicos autorizados e
+# usa essa lista quando o servidor nao responde (validade 15 dias).
+#   POST {"id": <ID do MrDesk>} -> {"lista": [codigos], "validade_dias": 15}
+# Cada codigo = SHA-256 de "<ID do MrDesk>:<ID do MrDeskPro>" (hex). Nao revela
+# os IDs dos tecnicos e so serve naquele cliente. Mesmo limite por IP da
+# verificacao.
+VALIDADE_LISTA_DIAS = 15
+
+
+@app.route("/api/tecnicos/lista", methods=["POST"])
+def lista_tecnicos_cache():
+    import hashlib
+    ip = request.headers.get("X-Real-IP") or request.remote_addr or "?"
+    if _excedeu_limite_verificacao(ip):
+        return jsonify({"motivo": "limite"}), 429
+
+    data = request.get_json(force=True, silent=True) or {}
+    cliente = _normalizar_id(data.get("id"))
+    if not cliente or len(cliente) > TAMANHO_ID_DISPOSITIVO:
+        return jsonify({"motivo": "id"}), 400
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT t.dispositivo FROM tecnicos_autorizados t JOIN usuarios u ON u.usuario = t.usuario "
+        "WHERE t.ativo = 'S' AND u.ativo = 'S'"
+    )
+    ids = [r[0] for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+
+    lista = sorted(hashlib.sha256(f"{cliente}:{tec}".encode()).hexdigest() for tec in ids)
+    return jsonify({"lista": lista, "validade_dias": VALIDADE_LISTA_DIAS})
+
+
+# ------------------------------------------------------------
 # AUDITORIA de conexoes (RustDesk /api/audit/conn)
 # ------------------------------------------------------------
 # O client manda ate 3 POSTs por sessao de conexao remota:

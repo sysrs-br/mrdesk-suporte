@@ -61,16 +61,16 @@ function calcularTempoDecorrido(str, online) {
   return `há ${dias} dia${dias > 1 ? "s" : ""} ${horasRestantes}h`;
 }
 
-// Item 16: "sem uso há X" quando ninguem mexe no teclado/mouse ha 3 min ou mais
+// Item 16: "Inativo há X" (verde, itálico) quando ninguem mexe no teclado/mouse ha 3 min ou mais
 const SEM_USO_A_PARTIR_DE_SEGUNDOS = 180;
 function textoSemUso(segundos) {
   if (segundos === null || segundos === undefined || segundos < SEM_USO_A_PARTIR_DE_SEGUNDOS) return "";
   const min = Math.floor(segundos / 60);
-  if (min < 60) return `sem uso há ${min} min`;
+  if (min < 60) return `Inativo há ${min} min`;
   const horas = Math.floor(min / 60);
-  if (horas < 24) return `sem uso há ${horas}h ${min % 60}min`;
+  if (horas < 24) return `Inativo há ${horas}h ${min % 60}min`;
   const dias = Math.floor(horas / 24);
-  return `sem uso há ${dias} dia${dias > 1 ? "s" : ""} ${horas % 24}h`;
+  return `Inativo há ${dias} dia${dias > 1 ? "s" : ""} ${horas % 24}h`;
 }
 
 // Coluna Sistema (01/10): o MrDesk manda "windows / Windows 10 Pro - 10.0.19045";
@@ -557,7 +557,7 @@ function renderizarTabela() {
       <td class="id-mono" style="${opacidadeConteudo}">${formatarId(d.id)}</td>
       <td class="data-centralizada" style="${opacidadeConteudo}">
         ${formatarDataHora(d.ultima_vez_online)}
-        ${tempoDecorrido ? `<div style="font-size:11px;font-style:italic;color:var(--texto-secundario);">${tempoDecorrido}</div>` : ""}
+        ${tempoDecorrido ? `<div style="font-size:11px;font-style:italic;color:${d.online ? "var(--verde)" : "var(--vermelho)"};">${tempoDecorrido}</div>` : ""}
       </td>
       <td class="col-sistema" style="${opacidadeConteudo}" title="${escapeHtml(hintSistema(d))}">${escapeHtml(sistemaCurto(d.sistema))}</td>
       <td class="acoes-linha col-acoes-estreita">

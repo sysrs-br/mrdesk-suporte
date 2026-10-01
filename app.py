@@ -640,6 +640,7 @@ def list_devices():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
         f"SELECT id, cliente, apelido, observacao, usuario, ativo, servidor, catalogo, "
+        f"sistema, memoria, processador, computador, "
         f"ultima_vez_online, inclusao, atualizado, "
         # tempo sem sinal calculado DENTRO do banco (mesmo relogio que gravou
         # ultima_vez_online) - nao depende do relogio/fuso do Python
@@ -668,6 +669,10 @@ def list_devices():
             "cliente": row["cliente"],
             "apelido": row["apelido"],
             "observacao": row["observacao"],
+            "sistema": row["sistema"],
+            "memoria": row["memoria"],
+            "processador": row["processador"],
+            "computador": row["computador"],
             "usuario": row["usuario"],
             "ativo": row["ativo"],
             "servidor": row["servidor"],
@@ -1062,7 +1067,16 @@ def sysinfo():
         return jsonify({})
 
     hostname = data.get("hostname") or device_id
-    sistema = data.get("os", "")
+    # O MrDesk ja manda isso no sysinfo (codigo do RustDesk, get_sysinfo):
+    # os ("windows / Windows 10 Pro - 10.0.19045"), memory ("8GB"),
+    # cpu ("Intel..., 1.8GHz, 8/4 cores") e hostname. Colunas criadas em 01/10.
+    def _txt(valor, tamanho):
+        valor = (str(valor).strip() if valor is not None else "")
+        return valor[:tamanho] or None
+    sistema = _txt(data.get("os"), 150)
+    memoria = _txt(data.get("memory"), 20)
+    processador = _txt(data.get("cpu"), 150)
+    computador = _txt(data.get("hostname"), 100)
 
     # Campo novo do client (patch aplicado em 26/09/2026): informa se o
     # RustDesk esta rodando instalado ("S") ou portatil/nao instalado ("N").
@@ -1083,17 +1097,21 @@ def sysinfo():
         # marca que esta vivo agora. instalado so e sobrescrito quando o
         # client manda o campo (CASE mantem o valor atual quando vier NULL) -
         # um unico UPDATE, priorizando performance (1 round-trip em vez de 2).
+        # (observacao deixou de receber o SO em 01/10 - o SO vai pra coluna sistema)
         cur.execute(
-            "UPDATE devices SET observacao = %s, ultima_vez_online = NOW(), "
+            "UPDATE devices SET sistema = COALESCE(%s, sistema), memoria = COALESCE(%s, memoria), "
+            "processador = COALESCE(%s, processador), computador = COALESCE(%s, computador), "
+            "ultima_vez_online = NOW(), "
             "instalado = CASE WHEN %s IS NOT NULL THEN %s ELSE instalado END "
             "WHERE id = %s",
-            (sistema, instalado, instalado, device_id)
+            (sistema, memoria, processador, computador, instalado, instalado, device_id)
         )
     else:
         cur.execute(
-            "INSERT INTO devices (id, cliente, apelido, observacao, usuario, catalogo, ultima_vez_online, instalado) "
-            "VALUES (%s, %s, %s, %s, %s, %s, NOW(), COALESCE(%s, 'S')) ON CONFLICT (id) DO NOTHING",
-            (device_id, "A definir", hostname, sistema, "sistema", 1, instalado)
+            "INSERT INTO devices (id, cliente, apelido, usuario, catalogo, ultima_vez_online, instalado, "
+            "sistema, memoria, processador, computador) "
+            "VALUES (%s, %s, %s, %s, %s, NOW(), COALESCE(%s, 'S'), %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+            (device_id, "A definir", hostname, "sistema", 1, instalado, sistema, memoria, processador, computador)
         )
 
     conn.commit()

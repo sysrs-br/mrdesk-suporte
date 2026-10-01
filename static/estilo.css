@@ -134,6 +134,8 @@
   .btn-conectar-icone:hover { color: var(--azul-escuro); }
 
   .acoes-linha { text-align: right; white-space: nowrap; position: relative; }
+  .col-acoes-estreita { width: 1%; } /* so o espaco dos botoes */
+  td.col-sistema { color: var(--texto-secundario); font-size: 13px; cursor: help; }
   .acoes-linha button { background: none; border: none; cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 6px; color: var(--texto-secundario); }
   .acoes-linha button:hover { background: var(--cinza-fundo); }
   .acoes-linha .icon { width: 18px; height: 18px; }

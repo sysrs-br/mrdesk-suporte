@@ -73,6 +73,26 @@ function textoSemUso(segundos) {
   return `sem uso há ${dias} dia${dias > 1 ? "s" : ""} ${horas % 24}h`;
 }
 
+// Coluna Sistema (01/10): o MrDesk manda "windows / Windows 10 Pro - 10.0.19045";
+// na coluna mostra so "Windows 10 Pro"; o hint traz o resto.
+function sistemaCurto(sistema) {
+  if (!sistema) return "—";
+  let s = sistema;
+  const barra = s.indexOf(" / ");
+  if (barra >= 0) s = s.slice(barra + 3);
+  const traco = s.lastIndexOf(" - ");
+  if (traco > 0) s = s.slice(0, traco);
+  return s.trim() || sistema;
+}
+function hintSistema(d) {
+  const linhas = [];
+  if (d.sistema) linhas.push(`Sistema: ${d.sistema}`);
+  if (d.memoria) linhas.push(`Memória: ${d.memoria}`);
+  if (d.processador) linhas.push(`Processador: ${d.processador}`);
+  if (d.computador) linhas.push(`Computador: ${d.computador}`);
+  return linhas.length ? linhas.join("\n") : "Sem informações (chegam no próximo registro do MrDesk)";
+}
+
 function mostrarApp() {
   document.getElementById("tela-login").style.display = "none";
   document.getElementById("app").style.display = "flex";
@@ -539,7 +559,8 @@ function renderizarTabela() {
         ${formatarDataHora(d.ultima_vez_online)}
         ${tempoDecorrido ? `<div style="font-size:11px;font-style:italic;color:var(--texto-secundario);">${tempoDecorrido}</div>` : ""}
       </td>
-      <td class="acoes-linha">
+      <td class="col-sistema" style="${opacidadeConteudo}" title="${escapeHtml(hintSistema(d))}">${escapeHtml(sistemaCurto(d.sistema))}</td>
+      <td class="acoes-linha col-acoes-estreita">
         <button title="Transferir arquivos" data-acao="arquivos" data-id="${d.id}">${ICONE_ARQUIVOS}</button>
         <button title="Mais ações" data-acao="menu" data-id="${d.id}">${ICONE_PONTOS}</button>
       </td>`;

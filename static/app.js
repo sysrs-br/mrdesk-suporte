@@ -486,7 +486,11 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-async function carregarDispositivos() {
+// silencioso (atualização automática e depois de conectar): mantém a lista
+// na mesma posição de rolagem e não mostra alerta se a rede falhar.
+async function carregarDispositivos(silencioso = false) {
+  const caixa = document.querySelector("main > .tabela-wrapper");
+  const rolagem = caixa ? caixa.scrollTop : 0;
   try {
     const filtroAtivo = document.getElementById("check-ativos").checked ? "S" : "N";
     const filtroServidor = document.getElementById("check-servidor").checked ? "S" : "N";
@@ -499,10 +503,22 @@ async function carregarDispositivos() {
     const data = await resp.json();
     dispositivos = data.devices || [];
     renderizarTabela();
+    if (silencioso && caixa) caixa.scrollTop = rolagem;
   } catch (err) {
-    alert("Erro ao carregar dispositivos: " + err.message);
+    if (!silencioso) alert("Erro ao carregar dispositivos: " + err.message);
   }
 }
+
+// Item 14: atualiza a lista (on-line/off-line, inativo) a cada 5 min, sem
+// mexer na posição. Pula se a aba está escondida, sem login ou com o menu de
+// ações aberto.
+const ATUALIZAR_LISTA_MS = 5 * 60 * 1000;
+setInterval(() => {
+  if (document.hidden || !catalogoAtual) return;
+  if (document.getElementById("app").style.display === "none") return;
+  if (document.getElementById("menu-flutuante").style.display === "block") return;
+  carregarDispositivos(true);
+}, ATUALIZAR_LISTA_MS);
 
 document.getElementById("check-ativos").addEventListener("change", (e) => {
   localStorage.setItem("mrdesk_filtro_ativos", e.target.checked ? "1" : "0");
@@ -723,7 +739,7 @@ async function conectar(id, modo) {
       window.location.href = data.link;
       // Atualiza a lista (bolinhas on-line/off-line) a cada conexao, sem
       // ficar recarregando sozinha o tempo todo (pedido do Celso, 30/09)
-      setTimeout(carregarDispositivos, 1500);
+      setTimeout(() => carregarDispositivos(true), 1500);
     } else {
       alert("Erro ao gerar link: " + data.error);
     }
@@ -829,7 +845,7 @@ document.getElementById("menu-flutuante").addEventListener("click", async (e) =>
         const data = await resp.json();
         if (data.success) {
           alert("Máquina liberada. Em alguns segundos o computador volta a aparecer on-line.");
-          setTimeout(carregarDispositivos, 20000);
+          setTimeout(() => carregarDispositivos(true), 20000);
         } else {
           alert("Erro ao liberar: " + data.error);
         }

@@ -536,7 +536,7 @@ function renderizarTabela() {
 
   filtrados.forEach(d => {
     const tr = document.createElement("tr");
-    tr.className = "linha-dispositivo";
+    tr.className = "linha-dispositivo" + (d.id === lerUltimoAcessado() ? " ultimo-acessado" : "");
     tr.dataset.id = d.id;
     const opacidadeConteudo = d.ativo === "N" ? "opacity:0.5;" : "";
 
@@ -701,11 +701,25 @@ document.getElementById("btn-limpar-busca").addEventListener("click", () => {
   atualizarVisibilidadeBotaoLimpar();
 });
 
+// Último dispositivo acessado (01/10): linha com fundo azul claro. Fica
+// guardado neste navegador (cada computador lembra o último acessado dali).
+const CHAVE_ULTIMO_ACESSADO = "mrdesk_ultimo_acessado";
+function lerUltimoAcessado() {
+  try { return localStorage.getItem(CHAVE_ULTIMO_ACESSADO); } catch (_) { return null; }
+}
+function marcarUltimoAcessado(id) {
+  try { localStorage.setItem(CHAVE_ULTIMO_ACESSADO, id); } catch (_) {}
+  document.querySelectorAll("tr.linha-dispositivo.ultimo-acessado").forEach(tr => tr.classList.remove("ultimo-acessado"));
+  const linha = document.querySelector(`tr.linha-dispositivo[data-id="${CSS.escape(String(id))}"]`);
+  if (linha) linha.classList.add("ultimo-acessado");
+}
+
 async function conectar(id, modo) {
   try {
     const resp = await fetch(`${API}/devices/${id}/connect?mode=${modo}`, { headers: headersAuth() });
     const data = await resp.json();
     if (data.success) {
+      marcarUltimoAcessado(id);
       window.location.href = data.link;
       // Atualiza a lista (bolinhas on-line/off-line) a cada conexao, sem
       // ficar recarregando sozinha o tempo todo (pedido do Celso, 30/09)

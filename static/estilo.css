@@ -115,6 +115,9 @@
   th.centralizado, td.centralizado { text-align: center; }
   tr:last-child td { border-bottom: none; }
   tr.linha-dispositivo:hover { background: var(--cinza-hover); }
+  /* Último dispositivo acessado neste navegador */
+  tr.linha-dispositivo.ultimo-acessado { background: #e3eefa; }
+  tr.linha-dispositivo.ultimo-acessado:hover { background: #d3e4f7; }
   .id-mono { font-family: monospace; color: var(--texto-secundario); }
   td.id-mono { text-align: right !important; }
   .data-centralizada { text-align: center; color: var(--texto-secundario); font-size: 13px; }

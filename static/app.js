@@ -73,6 +73,31 @@ function textoSemUso(segundos) {
   return `Inativo há ${dias} dia${dias > 1 ? "s" : ""} ${horas % 24}h`;
 }
 
+// Versão do ERP (item 30). Compara número por número entre os pontos
+// (1.10 é maior que 1.9). Devolve -1, 0 ou 1; partes que faltam valem 0.
+function compararVersoes(a, b) {
+  const pa = String(a).split(".").map(n => parseInt(n, 10) || 0);
+  const pb = String(b).split(".").map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+function versaoValida(v) {
+  return /^\d+(\.\d+)*$/.test(v);
+}
+// Versão mínima: guardada neste navegador (engrenagem ao lado do usuário).
+const CHAVE_VERSAO_MINIMA = "mrdesk_versao_minima_erp";
+function lerVersaoMinima() {
+  try { return localStorage.getItem(CHAVE_VERSAO_MINIMA) || ""; } catch (_) { return ""; }
+}
+function versaoAbaixoDaMinima(versao) {
+  const minima = lerVersaoMinima();
+  if (!versao || !minima || !versaoValida(versao) || !versaoValida(minima)) return false;
+  return compararVersoes(versao, minima) < 0;
+}
+
 // Coluna Sistema (01/10): o MrDesk manda "windows / Windows 10 Pro - 10.0.19045";
 // na coluna mostra so "Windows 10 Pro"; o hint traz o resto.
 function sistemaCurto(sistema) {
@@ -283,6 +308,38 @@ document.getElementById("btn-tecnicos-autorizados").addEventListener("click", ()
 document.getElementById("btn-alterar-senha").addEventListener("click", () => {
   document.getElementById("menu-usuario-lista").classList.remove("aberto");
   abrirModalAlterarSenha();
+});
+
+// ---- Configurações deste navegador (engrenagem): versão mínima do ERP ----
+document.getElementById("btn-configuracoes").addEventListener("click", () => {
+  document.getElementById("erro-configuracoes").style.display = "none";
+  document.getElementById("config-versao-minima").value = lerVersaoMinima();
+  document.getElementById("overlay-configuracoes").style.display = "flex";
+  document.getElementById("config-versao-minima").focus();
+});
+function fecharModalConfiguracoes() {
+  document.getElementById("overlay-configuracoes").style.display = "none";
+}
+document.getElementById("btn-cancelar-configuracoes").addEventListener("click", fecharModalConfiguracoes);
+document.getElementById("form-configuracoes").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const valor = document.getElementById("config-versao-minima").value.trim();
+  const erroEl = document.getElementById("erro-configuracoes");
+  if (valor && !versaoValida(valor)) {
+    erroEl.textContent = "Use só números separados por ponto (ex.: 2.10.3).";
+    erroEl.style.display = "block";
+    return;
+  }
+  try {
+    if (valor) localStorage.setItem(CHAVE_VERSAO_MINIMA, valor);
+    else localStorage.removeItem(CHAVE_VERSAO_MINIMA);
+  } catch (_) {
+    erroEl.textContent = "Este navegador não permitiu guardar a configuração.";
+    erroEl.style.display = "block";
+    return;
+  }
+  fecharModalConfiguracoes();
+  renderizarTabela();
 });
 
 function abrirModalAlterarSenha() {
@@ -579,6 +636,7 @@ function renderizarTabela() {
         ${tempoDecorrido ? `<div style="font-size:11px;font-style:italic;color:${d.online ? "var(--verde)" : "var(--vermelho)"};">${tempoDecorrido}</div>` : ""}
       </td>
       <td class="col-sistema" style="${opacidadeConteudo}" title="${escapeHtml(hintSistema(d))}">${escapeHtml(sistemaCurto(d.sistema))}</td>
+      <td class="col-versao${versaoAbaixoDaMinima(d.versao_erp) ? " versao-antiga" : ""}" style="${opacidadeConteudo}"><span${versaoAbaixoDaMinima(d.versao_erp) ? ` title="Abaixo da versão mínima (${escapeHtml(lerVersaoMinima())})"` : ""}>${escapeHtml(d.versao_erp || "")}</span></td>
       <td class="acoes-linha col-acoes-estreita">
         <button title="Transferir arquivos" data-acao="arquivos" data-id="${d.id}">${ICONE_ARQUIVOS}</button>
         <button title="Mais ações" data-acao="menu" data-id="${d.id}">${ICONE_PONTOS}</button>

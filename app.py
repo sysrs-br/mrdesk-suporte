@@ -14,6 +14,7 @@ import os
 import sys
 import time
 import threading
+import hmac
 import config
 
 app = Flask(__name__)
@@ -634,7 +635,7 @@ def list_devices():
     if not catalogo:
         return jsonify({"success": False, "error": "catalogo e obrigatorio"}), 400
 
-    condicoes = ["catalogo = %s", "ativo = %s", "servidor = %s", "instalado = %s"]
+    condicoes = ["d.catalogo = %s", "d.ativo = %s", "d.servidor = %s", "d.instalado = %s"]
     parametros = [catalogo, filtro_ativo, filtro_servidor, filtro_instalado]
 
     where_sql = " AND ".join(condicoes)
@@ -642,14 +643,17 @@ def list_devices():
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        f"SELECT id, cliente, apelido, observacao, usuario, ativo, servidor, catalogo, "
-        f"sistema, memoria, processador, computador, "
-        f"ultima_vez_online, inclusao, atualizado, "
+        f"SELECT d.id, d.cliente, d.apelido, d.observacao, d.usuario, d.ativo, d.servidor, d.catalogo, "
+        f"d.sistema, d.memoria, d.processador, d.computador, "
+        f"d.ultima_vez_online, d.inclusao, d.atualizado, "
+        # item 30: versao do ERP (licencas.id_mrdesk = devices.id, no maximo 1 por device)
+        f"l.versao AS versao_erp, "
         # tempo sem sinal calculado DENTRO do banco (mesmo relogio que gravou
         # ultima_vez_online) - nao depende do relogio/fuso do Python
-        f"EXTRACT(EPOCH FROM (NOW() - ultima_vez_online)) AS segundos_sem_sinal, "
-        f"EXTRACT(EPOCH FROM (NOW() - ultima_atividade)) AS segundos_sem_uso "
-        f"FROM devices WHERE {where_sql} ORDER BY cliente, apelido",
+        f"EXTRACT(EPOCH FROM (NOW() - d.ultima_vez_online)) AS segundos_sem_sinal, "
+        f"EXTRACT(EPOCH FROM (NOW() - d.ultima_atividade)) AS segundos_sem_uso "
+        f"FROM devices d LEFT JOIN licencas l ON l.id_mrdesk = d.id "
+        f"WHERE {where_sql} ORDER BY d.cliente, d.apelido",
         parametros
     )
     rows = cur.fetchall()
@@ -673,6 +677,7 @@ def list_devices():
             "apelido": row["apelido"],
             "observacao": row["observacao"],
             "sistema": row["sistema"],
+            "versao_erp": row["versao_erp"],
             "memoria": row["memoria"],
             "processador": row["processador"],
             "computador": row["computador"],
@@ -1035,6 +1040,88 @@ def delete_device(device_id):
         return jsonify({"success": False, "error": "Dispositivo nao encontrado"}), 404
 
     return jsonify({"success": True})
+
+
+# ------------------------------------------------------------
+# VERSAO DO ERP (item 30) - chamada pelo processo de build/atualizacao do ERP
+# ------------------------------------------------------------
+# POST /api/licencas/versao com cnpj, serial e versao (JSON, formulario ou na
+# URL) e usuario/senha por autenticacao basica do HTTP (no Indy:
+# Request.Username / Request.Password com BasicAuthentication = True).
+# O usuario e a senha ficam no config.py (ERP_API_USUARIO / ERP_API_SENHA);
+# sem eles configurados a rota recusa tudo.
+# So atualiza quando os 3 campos vem preenchidos e a versao tem so numeros e
+# pontos; licenca inexistente e ignorada. No PostgreSQL o gatilho
+# tgl_bu_licencas NAO grava historico em versoes (trecho comentado na funcao):
+# a propria rota guarda a versao anterior em versoes, com a data da troca.
+def _erp_autorizado():
+    usuario = getattr(config, "ERP_API_USUARIO", None)
+    senha = getattr(config, "ERP_API_SENHA", None)
+    auth = request.authorization
+    if not usuario or not senha or not auth or auth.type != "basic":
+        return False
+    return (hmac.compare_digest((auth.username or "").encode(), str(usuario).encode())
+            and hmac.compare_digest((auth.password or "").encode(), str(senha).encode()))
+
+
+@app.route("/api/licencas/versao", methods=["POST"])
+def licenca_versao():
+    if not _erp_autorizado():
+        return (jsonify({"success": False, "error": "Nao autorizado"}), 401,
+                {"WWW-Authenticate": 'Basic realm="MrDesk"'})
+
+    data = request.get_json(force=True, silent=True)
+    if not isinstance(data, dict):
+        data = {}
+
+    def campo(nome):
+        valor = data.get(nome)
+        if valor is None:
+            valor = request.values.get(nome)
+        return str(valor).strip() if valor is not None else ""
+
+    # so letras e numeros (tira pontos, barra e traco; CNPJ novo pode ter letras)
+    cnpj = "".join(c for c in campo("cnpj") if c.isalnum()).upper()
+    serial = campo("serial")
+    versao = campo("versao")
+    if not cnpj or not serial or not versao:
+        return jsonify({"success": True, "atualizado": False, "motivo": "campos vazios"})
+    if (len(cnpj) > 14 or len(serial) > 20 or len(versao) > 15
+            or not all(parte.isdigit() for parte in versao.split("."))):
+        return jsonify({"success": False, "error": "Dados invalidos"}), 400
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT versao FROM licencas WHERE cnpj = %s AND serial = %s FOR UPDATE",
+                    (cnpj, serial))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return jsonify({"success": True, "atualizado": False, "motivo": "licenca nao encontrada"})
+        if row[0] == versao:
+            conn.rollback()
+            return jsonify({"success": True, "atualizado": False, "motivo": "mesma versao"})
+        if row[0] is not None:
+            # historico: guarda a versao anterior com a data da troca (se ja
+            # existir - cliente voltou pra ela e subiu de novo - atualiza a data)
+            cur.execute(
+                "INSERT INTO versoes (cnpj, serial, versao, data) VALUES (%s, %s, %s, NOW()) "
+                "ON CONFLICT (cnpj, serial, versao) DO UPDATE SET data = NOW()",
+                (cnpj, serial, row[0])
+            )
+        cur.execute("UPDATE licencas SET versao = %s WHERE cnpj = %s AND serial = %s",
+                    (versao, cnpj, serial))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"versao do ERP nao gravada ({cnpj}/{serial} -> {versao}): {e}",
+              file=sys.stderr, flush=True)
+        return jsonify({"success": False, "error": "Erro ao gravar"}), 500
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify({"success": True, "atualizado": True})
 
 
 # ------------------------------------------------------------

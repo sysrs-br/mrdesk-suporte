@@ -139,6 +139,10 @@
   .acoes-linha { text-align: right; white-space: nowrap; position: relative; }
   .col-acoes-estreita { width: 1%; } /* so o espaco dos botoes */
   td.col-sistema { color: var(--texto-secundario); font-size: 13px; cursor: help; }
+  /* Versão do ERP (item 30): amarela quando menor que a mínima configurada */
+  td.col-versao { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.col-versao.versao-antiga span { background: #fde68a; color: #713f12; border-radius: 6px; padding: 2px 7px; font-weight: 600; cursor: help; }
+  .ajuda-configuracoes { font-size: 12px; color: var(--texto-secundario); margin-top: 8px; line-height: 1.4; }
   .acoes-linha button { background: none; border: none; cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 6px; color: var(--texto-secundario); }
   .acoes-linha button:hover { background: var(--cinza-fundo); }
   .acoes-linha .icon { width: 18px; height: 18px; }
@@ -161,20 +165,20 @@
   #contador { margin-top: 10px; font-size: 12px; color: var(--texto-secundario); }
 
   #overlay, #overlay-catalogo, #overlay-usuarios, #overlay-auditoria { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 100; }
-  #overlay-form-usuario, #overlay-alterar-senha { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 150; }
-  #modal, #modal-catalogo, #modal-form-usuario, #modal-alterar-senha { background: #fff; border-radius: 12px; padding: 24px; width: 360px; }
+  #overlay-form-usuario, #overlay-alterar-senha, #overlay-configuracoes { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 150; }
+  #modal, #modal-catalogo, #modal-form-usuario, #modal-alterar-senha, #modal-configuracoes { background: #fff; border-radius: 12px; padding: 24px; width: 360px; }
   #modal-usuarios, #modal-auditoria { background: #fff; border-radius: 12px; padding: 24px; width: 820px; max-width: 95vw; max-height: 85vh; overflow-y: auto; }
   #modal-auditoria { width: 1200px; } /* 7 colunas (Origem e Permissao) sem rolagem lateral */
   #corpo-tabela-auditoria td.col-ip { white-space: normal; word-break: break-all; min-width: 110px; } /* IPv6 quebra linha em vez de alargar a tabela */
-  #modal h2, #modal-catalogo h2, #modal-usuarios h2, #modal-auditoria h2, #modal-form-usuario h2, #modal-alterar-senha h2 { font-size: 16px; margin-top: 0; }
-  #modal label, #modal-form-usuario label, #modal-alterar-senha label { display: block; font-size: 12px; color: var(--texto-secundario); margin-bottom: 4px; margin-top: 12px; }
-  #modal input[type="text"], #modal-form-usuario input[type="text"], #modal-form-usuario input[type="password"], #modal-alterar-senha input[type="password"] { width: 100%; padding: 9px 10px; border: 1px solid var(--cinza-borda); border-radius: 8px; font-size: 14px; }
+  #modal h2, #modal-catalogo h2, #modal-usuarios h2, #modal-auditoria h2, #modal-form-usuario h2, #modal-alterar-senha h2, #modal-configuracoes h2 { font-size: 16px; margin-top: 0; }
+  #modal label, #modal-form-usuario label, #modal-alterar-senha label, #modal-configuracoes label { display: block; font-size: 12px; color: var(--texto-secundario); margin-bottom: 4px; margin-top: 12px; }
+  #modal input[type="text"], #modal-configuracoes input[type="text"], #modal-form-usuario input[type="text"], #modal-form-usuario input[type="password"], #modal-alterar-senha input[type="password"] { width: 100%; padding: 9px 10px; border: 1px solid var(--cinza-borda); border-radius: 8px; font-size: 14px; }
   #modal-auditoria input[type="date"] { padding: 7px 8px; border: 1px solid var(--cinza-borda); border-radius: 8px; font-size: 13px; margin-left: 6px; }
   .tabela-wrapper-auditoria { max-height: 420px; overflow-y: auto; }
   .tabela-wrapper-auditoria thead th { position: sticky; top: 0; z-index: 5; }
-  #modal .rodape-modal, #modal-catalogo .rodape-modal, #modal-usuarios .rodape-modal, #modal-auditoria .rodape-modal, #modal-form-usuario .rodape-modal, #modal-alterar-senha .rodape-modal { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
-  #modal .btn-cancelar, #modal-catalogo .btn-cancelar, #modal-usuarios .btn-cancelar, #modal-auditoria .btn-cancelar, #modal-form-usuario .btn-cancelar, #modal-alterar-senha .btn-cancelar { background: none; border: 1px solid var(--cinza-borda); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
-  #erro-modal, #erro-modal-usuario, #erro-alterar-senha { color: var(--vermelho); font-size: 12px; margin-top: 10px; display: none; }
+  #modal .rodape-modal, #modal-catalogo .rodape-modal, #modal-usuarios .rodape-modal, #modal-auditoria .rodape-modal, #modal-form-usuario .rodape-modal, #modal-alterar-senha .rodape-modal, #modal-configuracoes .rodape-modal { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+  #modal .btn-cancelar, #modal-catalogo .btn-cancelar, #modal-usuarios .btn-cancelar, #modal-auditoria .btn-cancelar, #modal-form-usuario .btn-cancelar, #modal-alterar-senha .btn-cancelar, #modal-configuracoes .btn-cancelar { background: none; border: 1px solid var(--cinza-borda); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
+  #erro-modal, #erro-modal-usuario, #erro-alterar-senha, #erro-configuracoes { color: var(--vermelho); font-size: 12px; margin-top: 10px; display: none; }
   #modal label.destaque-servidor {
     display: flex; align-items: center; gap: 8px;
     margin-top: 14px; margin-bottom: 0;

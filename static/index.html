@@ -40,6 +40,9 @@
     </div>
     <div class="header-centro">Suporte Remoto da Sysrs</div>
     <div class="header-direita">
+      <button type="button" class="combo-catalogo-btn" id="btn-configuracoes" title="Configurações deste navegador">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
       <div class="combo-catalogo" id="menu-usuario-wrap">
         <button type="button" class="combo-catalogo-btn" id="btn-usuario-menu" title="Menu do usuário">
           <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.5 19a5.5 5.5 0 0 1 11 0"/></svg>
@@ -100,6 +103,7 @@
             <th style="text-align:right;">ID</th>
             <th class="centralizado">Última vez on-line</th>
             <th>Sistema</th>
+            <th title="Versão do ERP">Versão</th>
             <th class="acoes-linha col-acoes-estreita">Ações</th>
           </tr>
         </thead>
@@ -335,6 +339,22 @@
       <div id="erro-alterar-senha"></div>
       <div class="rodape-modal">
         <button type="button" class="btn-cancelar" id="btn-cancelar-alterar-senha">Cancelar</button>
+        <button type="submit" class="btn-primario">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="overlay-configuracoes">
+  <div id="modal-configuracoes">
+    <h2>Configurações</h2>
+    <form id="form-configuracoes">
+      <label>Versão mínima do ERP</label>
+      <input type="text" id="config-versao-minima" maxlength="15" inputmode="decimal" placeholder="ex.: 2.10.3" autocomplete="off">
+      <div class="ajuda-configuracoes">Na lista, a versão menor que esta fica amarela. Deixe vazio para não destacar. Vale só neste navegador.</div>
+      <div id="erro-configuracoes"></div>
+      <div class="rodape-modal">
+        <button type="button" class="btn-cancelar" id="btn-cancelar-configuracoes">Cancelar</button>
         <button type="submit" class="btn-primario">Salvar</button>
       </div>
     </form>

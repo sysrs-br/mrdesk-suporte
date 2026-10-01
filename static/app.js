@@ -101,6 +101,9 @@ function mostrarApp() {
   document.getElementById("btn-tecnicos-autorizados").style.display = usuarioAdmin ? "flex" : "none";
   document.getElementById("separador-menu-usuario").style.display = usuarioAdmin ? "block" : "none";
   document.getElementById("btn-menu-excluir-dispositivo").style.display = (usuarioAdmin || usuarioExcluirDevice) ? "flex" : "none";
+  // Item 9: liberar nova máquina (Windows reinstalado) - só admin
+  document.getElementById("btn-menu-liberar-maquina").style.display = usuarioAdmin ? "flex" : "none";
+  document.getElementById("separador-menu-liberar").style.display = usuarioAdmin ? "block" : "none";
   carregarCatalogos();
   carregarTrafego();
 }
@@ -742,7 +745,7 @@ document.getElementById("corpo-tabela").addEventListener("click", async (e) => {
       const rect = btn.getBoundingClientRect();
       menu.style.display = "block";
       // Posiciona abaixo do botao; se nao couber embaixo, abre para cima
-      const alturaEstimada = 130;
+      const alturaEstimada = usuarioAdmin ? 175 : 130;
       if (rect.bottom + alturaEstimada > window.innerHeight) {
         menu.style.top = (rect.top - alturaEstimada) + "px";
       } else {
@@ -798,6 +801,28 @@ document.getElementById("menu-flutuante").addEventListener("click", async (e) =>
 
   if (acao === "auditoria") {
     abrirModalAuditoria(id);
+  }
+
+  // Item 9: Windows reinstalado (mesmo ID, máquina nova) - apaga a máquina
+  // registrada; o próximo contato do MrDesk grava a nova.
+  if (acao === "liberar-maquina") {
+    const dev = dispositivos.find(d => d.id === id);
+    if (confirm(`Liberar nova máquina para "${dev.cliente}" (${dev.apelido})?\n\n` +
+        "Use quando o Windows desse computador foi reinstalado: até liberar, ele fica off-line no painel e não gera auditoria. " +
+        "O próximo contato do MrDesk registra a máquina nova.")) {
+      try {
+        const resp = await fetch(`${API}/devices/${id}/liberar-maquina`, { method: "POST", headers: headersAuth() });
+        const data = await resp.json();
+        if (data.success) {
+          alert("Máquina liberada. Em alguns segundos o computador volta a aparecer on-line.");
+          setTimeout(carregarDispositivos, 20000);
+        } else {
+          alert("Erro ao liberar: " + data.error);
+        }
+      } catch (err) {
+        alert("Erro ao liberar: " + err.message);
+      }
+    }
   }
 });
 

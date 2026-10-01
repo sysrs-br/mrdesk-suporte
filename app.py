@@ -952,6 +952,29 @@ def edit_device(device_id):
 
 
 # ------------------------------------------------------------
+# LIBERAR NOVA MAQUINA (item 9) - so admin. Apaga devices.uuid; o proximo
+# contato do MrDesk (heartbeat em segundos) grava o uuid novo.
+# ------------------------------------------------------------
+@app.route("/api/devices/<device_id>/liberar-maquina", methods=["POST"])
+@require_auth
+@require_admin
+def liberar_maquina(device_id):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE devices SET uuid = NULL WHERE id = %s", (device_id,))
+    conn.commit()
+    atualizado = cur.rowcount
+    cur.close()
+    conn.close()
+    if atualizado == 0:
+        return jsonify({"success": False, "error": "Dispositivo nao encontrado"}), 404
+    _uuid_ultimo_log.pop(device_id, None)
+    print(f"maquina liberada: dispositivo {device_id} por {getattr(request, 'usuario_logado', '?')}",
+          file=sys.stderr, flush=True)
+    return jsonify({"success": True})
+
+
+# ------------------------------------------------------------
 # MOVER dispositivo de catalogo
 # ------------------------------------------------------------
 @app.route("/api/devices/<device_id>/catalogo", methods=["PUT"])
@@ -1015,6 +1038,51 @@ def delete_device(device_id):
 
 
 # ------------------------------------------------------------
+# MAQUINA DO DISPOSITIVO (item 9) - devices.uuid
+# ------------------------------------------------------------
+# Heartbeat, sysinfo e auditoria nao tem senha (desenho do RustDesk). O MrDesk
+# manda em todos o "uuid" da maquina (codigo da instalacao do Windows). O
+# primeiro contato grava em devices.uuid; dai em diante aviso com uuid
+# diferente (ou sem uuid) e recusado e vai pro log - assim ninguem grava
+# auditoria falsa nem mexe no on-line/sistema de um ID sem conhecer o uuid.
+# Reinstalou o Windows (mesmo ID, uuid novo): o computador fica off-line no
+# painel ate o admin usar "Liberar nova maquina" (apaga o uuid; o proximo
+# contato grava o novo).
+_UUID_LOG_INTERVALO = 600  # segundos entre linhas de log do mesmo ID
+_uuid_ultimo_log = {}
+
+
+def _uuid_recebido(data):
+    valor = data.get("uuid")
+    return str(valor)[:64] if valor else None
+
+
+def _maquina_confere(cur, device_id, uuid_env, origem):
+    """True se o aviso pode ser gravado. Grava o uuid no primeiro contato.
+    Dispositivo inexistente: True (quem chamou decide se cria)."""
+    cur.execute("SELECT uuid FROM devices WHERE id = %s", (device_id,))
+    row = cur.fetchone()
+    if not row:
+        return True
+    guardado = row[0]
+    if guardado is None:
+        if uuid_env:
+            cur.execute("UPDATE devices SET uuid = %s WHERE id = %s AND uuid IS NULL",
+                        (uuid_env, device_id))
+        return True
+    if uuid_env == guardado:
+        return True
+    agora = time.time()
+    if agora - _uuid_ultimo_log.get(device_id, 0) >= _UUID_LOG_INTERVALO:
+        _uuid_ultimo_log[device_id] = agora
+        ip = request.headers.get("X-Real-IP") or request.remote_addr
+        print(f"maquina diferente recusada ({origem}): dispositivo {device_id}, "
+              f"uuid recebido {uuid_env!r}, IP {ip} - se o Windows foi reinstalado, "
+              f"use 'Liberar nova maquina' no painel", file=sys.stderr, flush=True)
+    return False
+
+
+# ------------------------------------------------------------
 # HEARTBEAT / SYSINFO - recebidos diretamente do cliente MrDesk
 # (nao passam pelo hbbs, o cliente manda direto pro "Servidor API"
 # configurado nele). Sem autenticacao, por desenho do proprio
@@ -1038,8 +1106,14 @@ def heartbeat():
     except (TypeError, ValueError):
         ocioso = None
 
+    uuid_env = _uuid_recebido(data)
     conn = get_db()
     cur = conn.cursor()
+    if not _maquina_confere(cur, device_id, uuid_env, "heartbeat"):
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({})
     cur.execute("SELECT id FROM devices WHERE id = %s", (device_id,))
     if cur.fetchone():
         if ocioso is None:
@@ -1055,9 +1129,9 @@ def heartbeat():
         # O /api/sysinfo (que chega poucos minutos depois) completa
         # os dados (hostname, SO, etc).
         cur.execute(
-            "INSERT INTO devices (id, cliente, apelido, usuario, catalogo, ultima_vez_online) "
-            "VALUES (%s, %s, %s, %s, %s, NOW()) ON CONFLICT (id) DO NOTHING",
-            (device_id, "A definir", device_id, "sistema", 1)
+            "INSERT INTO devices (id, cliente, apelido, usuario, catalogo, ultima_vez_online, uuid) "
+            "VALUES (%s, %s, %s, %s, %s, NOW(), %s) ON CONFLICT (id) DO NOTHING",
+            (device_id, "A definir", device_id, "sistema", 1, uuid_env)
         )
     conn.commit()
     cur.close()
@@ -1093,8 +1167,14 @@ def sysinfo():
     if instalado not in ("S", "N"):
         instalado = None
 
+    uuid_env = _uuid_recebido(data)
     conn = get_db()
     cur = conn.cursor()
+    if not _maquina_confere(cur, device_id, uuid_env, "sysinfo"):
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({})
     cur.execute("SELECT id, apelido FROM devices WHERE id = %s", (device_id,))
     row = cur.fetchone()
 
@@ -1116,9 +1196,10 @@ def sysinfo():
     else:
         cur.execute(
             "INSERT INTO devices (id, cliente, apelido, usuario, catalogo, ultima_vez_online, instalado, "
-            "sistema, memoria, processador, computador) "
-            "VALUES (%s, %s, %s, %s, %s, NOW(), COALESCE(%s, 'S'), %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
-            (device_id, "A definir", hostname, "sistema", 1, instalado, sistema, memoria, processador, computador)
+            "sistema, memoria, processador, computador, uuid) "
+            "VALUES (%s, %s, %s, %s, %s, NOW(), COALESCE(%s, 'S'), %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+            (device_id, "A definir", hostname, "sistema", 1, instalado, sistema, memoria, processador, computador,
+             uuid_env)
         )
 
     conn.commit()
@@ -1625,7 +1706,7 @@ def audit_conn():
         "origem": str(origem)[:20] if origem is not None else None,
         "nome": nome,
         "tipo": tipo,
-        "uuid": data.get("uuid"),
+        "uuid": _uuid_recebido(data),
         "fecha": action == "close",
         "permissao": permissao,
     }
@@ -1633,11 +1714,16 @@ def audit_conn():
     conn = get_db()
     cur = conn.cursor()
     try:
+        # Item 9: so grava aviso da maquina registrada pra esse ID.
+        if not _maquina_confere(cur, p["dispositivo"], p["uuid"], "auditoria"):
+            conn.commit()
+            return ("", 200)
         if acesso is not None:
             # MrDesk 1.4.10+: o numero ja identifica o acesso.
             cur.execute(
                 _AUDIT_INSERT.format(acesso="%(acesso)s")
-                + " ON CONFLICT (dispositivo, acesso) DO UPDATE SET " + _AUDIT_SET,
+                + " ON CONFLICT (dispositivo, acesso) DO UPDATE SET " + _AUDIT_SET
+                + " WHERE auditoria.uuid IS NULL OR auditoria.uuid = %(uuid)s",
                 p
             )
         elif action == "new":
@@ -1645,6 +1731,7 @@ def audit_conn():
             cur.execute(
                 "SELECT acesso FROM auditoria WHERE dispositivo = %(dispositivo)s "
                 "AND acesso %% %(fator)s = %(conexao)s AND sessao = %(sessao)s AND fim IS NULL "
+                "AND (uuid IS NULL OR uuid = %(uuid)s) "
                 "ORDER BY acesso DESC LIMIT 1",
                 p
             )
@@ -1668,6 +1755,7 @@ def audit_conn():
             cur.execute(
                 "SELECT acesso FROM auditoria WHERE dispositivo = %(dispositivo)s "
                 "AND acesso %% %(fator)s = %(conexao)s AND fim IS NULL "
+                "AND (uuid IS NULL OR uuid = %(uuid)s) "
                 "ORDER BY acesso DESC LIMIT 1",
                 p
             )

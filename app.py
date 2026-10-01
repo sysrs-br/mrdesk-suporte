@@ -305,7 +305,10 @@ def get_db():
 # ------------------------------------------------------------
 @app.route("/api/login", methods=["POST"])
 def login():
-    data = request.get_json()
+    data = request.get_json(force=True, silent=True) or {}
+    # Mesmo endereco do login do MrDeskPro (item 24): o RustDesk manda id/uuid.
+    if data.get("uuid") and data.get("id"):
+        return login_pro()
     username = data.get("username")
     password = data.get("password")
 
@@ -1346,6 +1349,174 @@ def lista_tecnicos_cache():
 
     lista = sorted(hashlib.sha256(f"{cliente}:{tec}".encode()).hexdigest() for tec in ids)
     return jsonify({"lista": lista, "validade_dias": VALIDADE_LISTA_DIAS})
+
+
+# ------------------------------------------------------------
+# LOGIN E CATALOGO DE ENDERECOS DO MRDESKPRO (item 24)
+# ------------------------------------------------------------
+# O MrDeskPro (login liberado so nele) usa o "catalogo de enderecos" nativo do
+# RustDesk no modo simples ("legacy"): /api/login, /api/currentUser,
+# /api/logout e GET /api/ab. /api/ab/personal NAO existe (404) - e assim que o
+# MrDeskPro sabe que deve usar o modo simples.
+# - Login com usuario/senha do painel, usuario ativo, e SO a partir de um
+#   MrDeskPro cadastrado em Tecnicos autorizados pra esse mesmo usuario.
+# - Sessao vale 30 dias (depois, entrar de novo). Usuario ou MrDeskPro
+#   desativado -> a sessao cai na proxima conferencia.
+# - Catalogo: devices ativo = S, instalado = S e servidor = S; somente leitura;
+#   sem senha/hash (o RustDesk permite guardar atalho de senha no catalogo).
+serializer_pro = URLSafeTimedSerializer(config.APP_SECRET_KEY, salt="mrdeskpro-catalogo")
+VALIDADE_SESSAO_PRO = 60 * 60 * 24 * 30  # 30 dias
+LIMITE_LOGIN_PRO_POR_MINUTO = 10
+_login_pro_por_ip = {}
+
+
+def _excedeu_limite_login_pro(ip):
+    agora = time.time()
+    with _verificacoes_lock:
+        janela = [t for t in _login_pro_por_ip.get(ip, []) if agora - t < 60]
+        janela.append(agora)
+        _login_pro_por_ip[ip] = janela
+        if len(_login_pro_por_ip) > 10000:
+            for chave in [k for k, v in _login_pro_por_ip.items() if not v or agora - v[-1] >= 60]:
+                del _login_pro_por_ip[chave]
+        return len(janela) > LIMITE_LOGIN_PRO_POR_MINUTO
+
+
+def _usuario_pro_valido(cur, usuario_id, dispositivo):
+    # usuario ativo + esse MrDeskPro ativo e dele. Devolve (nome, admin, email) ou None.
+    cur.execute(
+        "SELECT u.nome, u.admin, u.email FROM usuarios u "
+        "JOIN tecnicos_autorizados t ON t.usuario = u.usuario "
+        "WHERE u.usuario = %s AND u.ativo = 'S' AND t.dispositivo = %s AND t.ativo = 'S'",
+        (usuario_id, dispositivo)
+    )
+    return cur.fetchone()
+
+
+def _payload_usuario_pro(nome, admin, email):
+    return {"name": nome, "display_name": nome, "email": email or "",
+            "status": 1, "is_admin": admin == "S"}
+
+
+def _sessao_pro():
+    # Le o "Bearer" do MrDeskPro. Devolve (usuario_id, dispositivo, linha) ou None.
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    if not token:
+        return None
+    try:
+        dados = serializer_pro.loads(token, max_age=VALIDADE_SESSAO_PRO)
+    except (SignatureExpired, BadSignature):
+        return None
+    conn = get_db()
+    cur = conn.cursor()
+    linha = _usuario_pro_valido(cur, dados.get("u"), dados.get("d"))
+    cur.close()
+    conn.close()
+    if not linha:
+        return None
+    return dados.get("u"), dados.get("d"), linha
+
+
+@app.route("/api/login-options", methods=["GET"])
+def login_options_pro():
+    return jsonify([])
+
+
+def login_pro():
+    # Chamado pelo /api/login do painel quando o pedido vem do MrDeskPro
+    # (o RustDesk manda "id" e "uuid" junto com usuario/senha).
+    ip = request.headers.get("X-Real-IP") or request.remote_addr or "?"
+    if _excedeu_limite_login_pro(ip):
+        return jsonify({"error": "Muitas tentativas. Aguarde um minuto e tente de novo."}), 429
+
+    data = request.get_json(force=True, silent=True) or {}
+    nome = (data.get("username") or "").strip()
+    senha = data.get("password") or ""
+    dispositivo = _normalizar_id(data.get("id"))
+    if not nome or not senha or not dispositivo:
+        return jsonify({"error": "Informe usuário e senha."}), 400
+
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT usuario, nome, senha, admin, email FROM usuarios WHERE nome = %s AND ativo = 'S'", (nome,))
+    user = cur.fetchone()
+    ok_senha = bool(user) and bcrypt.checkpw(senha.encode(), user["senha"].encode())
+    autorizado = None
+    if ok_senha:
+        cur2 = conn.cursor()
+        autorizado = _usuario_pro_valido(cur2, user["usuario"], dispositivo)
+        cur2.close()
+    cur.close()
+    conn.close()
+
+    if not ok_senha:
+        return jsonify({"error": "Usuário ou senha inválidos."}), 401
+    if not autorizado:
+        print(f"login MrDeskPro recusado: usuario {nome} a partir de {dispositivo} (nao autorizado)",
+              file=sys.stderr, flush=True)
+        return jsonify({"error": "Este MrDeskPro não está autorizado para este usuário."}), 401
+
+    token = serializer_pro.dumps({"u": user["usuario"], "d": dispositivo})
+    return jsonify({
+        "type": "access_token",
+        "access_token": token,
+        "user": _payload_usuario_pro(user["nome"], user["admin"], user["email"]),
+    })
+
+
+@app.route("/api/currentUser", methods=["POST"])
+def current_user_pro():
+    sessao = _sessao_pro()
+    if not sessao:
+        return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
+    nome, admin, email = sessao[2]
+    return jsonify(_payload_usuario_pro(nome, admin, email))
+
+
+@app.route("/api/logout", methods=["POST"])
+def logout_pro():
+    return jsonify({})
+
+
+@app.route("/api/ab", methods=["GET"])
+def catalogo_pro():
+    import json as _json
+    if not _sessao_pro():
+        return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
+
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "SELECT d.id, d.cliente, d.apelido, d.sistema, c.nome AS catalogo_nome "
+        "FROM devices d LEFT JOIN catalogos c ON c.catalogo = d.catalogo "
+        "WHERE d.ativo = 'S' AND d.instalado = 'S' AND d.servidor = 'S' "
+        "ORDER BY d.cliente, d.apelido"
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    peers = []
+    tags = []
+    for r in rows:
+        tag = (r["catalogo_nome"] or "").strip()
+        if tag and tag not in tags:
+            tags.append(tag)
+        peers.append({
+            "id": r["id"],
+            "username": r["cliente"] or "",   # 2a linha do card, a esquerda
+            "hostname": r["apelido"] or "",   # 2a linha do card, a direita
+            "alias": "",
+            "platform": "Windows" if (r["sistema"] or "").lower().startswith("windows") else "",
+            "tags": [tag] if tag else [],
+        })
+    dados = {"tags": tags, "peers": peers, "tag_colors": "{}"}
+    return jsonify({"data": _json.dumps(dados, ensure_ascii=False)})
+
+
+@app.route("/api/ab", methods=["POST"])
+def catalogo_pro_somente_leitura():
+    return jsonify({"error": "A lista do MrDeskPro vem do painel e não pode ser alterada aqui."}), 403
 
 
 # ------------------------------------------------------------

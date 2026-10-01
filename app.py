@@ -849,7 +849,7 @@ def get_auditoria(device_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "SELECT sequencia, inicio, fim, nome, origem, tipo, ip, permissao "
+        "SELECT inicio, fim, nome, origem, tipo, ip, permissao "
         "FROM auditoria WHERE dispositivo = %s AND inicio >= %s AND inicio < %s "
         "ORDER BY inicio DESC",
         (device_id, data_inicio, data_fim)
@@ -865,7 +865,6 @@ def get_auditoria(device_id):
             duracao_segundos = int((row["fim"] - row["inicio"]).total_seconds())
 
         registros.append({
-            "sequencia": row["sequencia"],
             "inicio": row["inicio"].isoformat() if row["inicio"] else None,
             "fim": row["fim"].isoformat() if row["fim"] else None,
             "duracao_segundos": duracao_segundos,
@@ -1527,24 +1526,52 @@ def catalogo_pro_somente_leitura():
 # ------------------------------------------------------------
 # AUDITORIA de conexoes (RustDesk /api/audit/conn)
 # ------------------------------------------------------------
-# O client manda ate 3 POSTs por sessao de conexao remota:
+# O client manda ate 3 POSTs por acesso remoto:
 #   1) abertura:  {"action": "new", "ip": "..."} - antes do login
 #   2) login ok:  {"peer": [id, nome], "type": N}  - sem campo "action"
 #   3) fechamento:{"action": "close"}
 # Em todos, o client tambem inclui: id (dispositivo controlado), uuid,
-# conn_id, session_id, nonce. Guardamos 1 linha por sessao (nao por
-# evento), correlacionada pela chave natural (dispositivo, conexao) -
-# NAO inclui sessao: o session_id ainda nao tem o valor definitivo no
-# evento de abertura (que acontece antes do login), entao o mesmo
-# conn_id chega com um session_id diferente depois do login. conexao
-# (conn_id) e o unico campo estavel durante toda a conexao. Vamos
-# completando os demais campos conforme os eventos chegam.
+# conn_id, session_id, nonce. Guardamos 1 linha por acesso (nao por
+# evento), com chave natural (dispositivo, acesso) - item 13.
+#
+# acesso (BIGINT) = segundo em que o servico do MrDesk iniciou (10 digitos)
+# * 1.000.000 + conn_id (6 digitos). O conn_id sozinho recomeca do 1 quando o
+# servico reinicia, por isso nao serve de chave.
+#   - MrDesk 1.4.10+ (patch 13 do rdgen) manda o numero pronto em
+#     "mrdesk_acesso", igual nos 3 avisos: junta direto pela chave.
+#   - MrDesk antigo (sem "mrdesk_acesso"): o servidor gera o numero na
+#     ABERTURA (hora da chegada * 1.000.000 + conn_id) e sempre cria linha
+#     nova. Login e fechamento completam a linha mais recente ainda aberta
+#     (fim vazio) desse dispositivo com o mesmo conn_id (6 ultimos digitos).
+#     Abertura reenviada (mesmo conn_id e mesma sessao, ainda aberta) reusa
+#     a linha em vez de duplicar.
 #
 # Importante: pelo codigo-fonte do RustDesk, o client so considera a
 # postagem bem-sucedida se a resposta vier com corpo VAZIO (HTTP 200).
 # Qualquer corpo nao-vazio - inclusive um "{}" - e tratado como possivel
 # falha e o client reenvia o mesmo evento. Por isso aqui NAO usamos
 # jsonify({}), retornamos uma resposta realmente vazia.
+ACESSO_FATOR = 1000000
+
+# Campos que cada evento completa na linha (COALESCE: so sobrescreve com valor).
+_AUDIT_SET = """
+    sessao    = COALESCE(%(sessao)s, auditoria.sessao),
+    ip        = COALESCE(%(ip)s::inet, auditoria.ip),
+    origem    = COALESCE(%(origem)s, auditoria.origem),
+    nome      = COALESCE(%(nome)s, auditoria.nome),
+    tipo      = COALESCE(%(tipo)s, auditoria.tipo),
+    uuid      = COALESCE(%(uuid)s, auditoria.uuid),
+    fim       = CASE WHEN %(fecha)s THEN COALESCE(auditoria.fim, NOW()) ELSE auditoria.fim END,
+    permissao = COALESCE(%(permissao)s, auditoria.permissao)
+"""
+
+_AUDIT_INSERT = """
+    INSERT INTO auditoria (dispositivo, acesso, sessao, ip, origem, nome, tipo, uuid, inicio, fim, permissao)
+    VALUES (%(dispositivo)s, {acesso}, %(sessao)s, %(ip)s, %(origem)s, %(nome)s, %(tipo)s, %(uuid)s,
+            NOW(), CASE WHEN %(fecha)s THEN NOW() ELSE NULL END, COALESCE(%(permissao)s, 'P'))
+"""
+
+
 @app.route("/api/audit/conn", methods=["POST"])
 def audit_conn():
     data = request.get_json(force=True, silent=True) or {}
@@ -1554,6 +1581,128 @@ def audit_conn():
     sessao = data.get("session_id")
     if not dispositivo or conexao is None or sessao is None:
         return ("", 200)
+
+    try:
+        conexao = int(conexao) % ACESSO_FATOR
+    except (TypeError, ValueError):
+        return ("", 200)
+
+    # Numero do acesso mandado pelo MrDesk 1.4.10+ (patch 13). Antigos nao mandam.
+    acesso = data.get("mrdesk_acesso")
+    try:
+        acesso = int(acesso) if acesso is not None else None
+    except (TypeError, ValueError):
+        acesso = None
+    if acesso is not None and acesso <= 0:
+        acesso = None
+
+    action = data.get("action")
+    # Controle de acesso (item 6A): o MrDesk com o patch manda "permissao"
+    # (P = permitida, B = bloqueada, F = falha na verificacao). Clientes sem o
+    # patch nao mandam: fica o default da coluna ('P' - nao havia controle).
+    permissao = data.get("permissao")
+    if permissao not in ("P", "B", "F"):
+        permissao = None
+
+    origem = None
+    nome = None
+    tipo = None
+    if not action:
+        # Sem "action" = evento de login: vem com "peer" (quem conectou) e "type".
+        peer = data.get("peer")
+        if isinstance(peer, list):
+            origem = peer[0] if len(peer) > 0 else None
+            nome = peer[1] if len(peer) > 1 else None
+        tipo = data.get("type")
+
+    p = {
+        "dispositivo": str(dispositivo)[:20],
+        "acesso": acesso,
+        "conexao": conexao,
+        "fator": ACESSO_FATOR,
+        "sessao": str(sessao),
+        "ip": data.get("ip") if action == "new" else None,
+        "origem": str(origem)[:20] if origem is not None else None,
+        "nome": nome,
+        "tipo": tipo,
+        "uuid": data.get("uuid"),
+        "fecha": action == "close",
+        "permissao": permissao,
+    }
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        if acesso is not None:
+            # MrDesk 1.4.10+: o numero ja identifica o acesso.
+            cur.execute(
+                _AUDIT_INSERT.format(acesso="%(acesso)s")
+                + " ON CONFLICT (dispositivo, acesso) DO UPDATE SET " + _AUDIT_SET,
+                p
+            )
+        elif action == "new":
+            # MrDesk antigo, abertura: reenvio da mesma abertura reusa a linha.
+            cur.execute(
+                "SELECT acesso FROM auditoria WHERE dispositivo = %(dispositivo)s "
+                "AND acesso %% %(fator)s = %(conexao)s AND sessao = %(sessao)s AND fim IS NULL "
+                "ORDER BY acesso DESC LIMIT 1",
+                p
+            )
+            row = cur.fetchone()
+            if row:
+                p["acesso"] = row[0]
+                cur.execute(
+                    "UPDATE auditoria SET " + _AUDIT_SET
+                    + " WHERE dispositivo = %(dispositivo)s AND acesso = %(acesso)s",
+                    p
+                )
+            else:
+                cur.execute(
+                    _AUDIT_INSERT.format(
+                        acesso="TRUNC(EXTRACT(EPOCH FROM NOW()))::BIGINT * %(fator)s + %(conexao)s")
+                    + " ON CONFLICT (dispositivo, acesso) DO NOTHING",
+                    p
+                )
+        else:
+            # MrDesk antigo, login/fechamento: completa a linha aberta mais recente.
+            cur.execute(
+                "SELECT acesso FROM auditoria WHERE dispositivo = %(dispositivo)s "
+                "AND acesso %% %(fator)s = %(conexao)s AND fim IS NULL "
+                "ORDER BY acesso DESC LIMIT 1",
+                p
+            )
+            row = cur.fetchone()
+            if row:
+                p["acesso"] = row[0]
+                cur.execute(
+                    "UPDATE auditoria SET " + _AUDIT_SET
+                    + " WHERE dispositivo = %(dispositivo)s AND acesso = %(acesso)s",
+                    p
+                )
+            elif not p["fecha"]:
+                # Login sem abertura registrada (aviso de abertura perdido): cria a linha.
+                cur.execute(
+                    _AUDIT_INSERT.format(
+                        acesso="TRUNC(EXTRACT(EPOCH FROM NOW()))::BIGINT * %(fator)s + %(conexao)s")
+                    + " ON CONFLICT (dispositivo, acesso) DO NOTHING",
+                    p
+                )
+            # Fechamento sem linha aberta = reenvio de um fechamento ja gravado: ignora.
+        conn.commit()
+    except psycopg2.errors.ForeignKeyViolation:
+        # fk_auditoria_device: o dispositivo nao existe em devices (quase
+        # impossivel - o heartbeat cria o device assim que o servico inicia).
+        # Fica sem auditoria, mas registra no log do servico
+        # (journalctl -u mrdesk-suporte). A resposta continua vazia/200,
+        # senao o client reenvia o mesmo evento sem parar.
+        conn.rollback()
+        print(f"auditoria ignorada: dispositivo {dispositivo} nao existe em devices "
+              f"(conexao {conexao})", file=sys.stderr, flush=True)
+    finally:
+        cur.close()
+        conn.close()
+
+    return ("", 200)
 
     try:
         conexao = int(conexao)

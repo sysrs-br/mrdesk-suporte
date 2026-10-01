@@ -710,13 +710,18 @@ def get_connect_link(device_id):
 
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT id FROM devices WHERE id = %s", (device_id,))
+    cur.execute("SELECT id, cliente FROM devices WHERE id = %s", (device_id,))
     row = cur.fetchone()
     cur.close()
     conn.close()
 
     if row:
         link = f"{ESQUEMA_CONEXAO}://{modo}/{row['id']}"
+        # Item 27: o MrDeskPro (patch 12) usa o nome do cliente como nome da aba
+        cliente = (row["cliente"] or "").strip()
+        if cliente:
+            from urllib.parse import quote
+            link += "?cliente=" + quote(cliente, safe="")
         return jsonify({"success": True, "link": link})
 
     # ID ainda nao cadastrado: permite conectar mesmo assim (botao "Acessar"

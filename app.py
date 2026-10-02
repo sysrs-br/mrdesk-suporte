@@ -1786,9 +1786,18 @@ def catalogo_pro():
     return jsonify({"data": _json.dumps(dados, ensure_ascii=False)})
 
 
+# O catalogo e somente leitura (vem do painel), mas o MrDeskPro tenta gravar
+# sozinho em varias situacoes - por exemplo a cada conexao com senha lembrada
+# ele manda o catalogo de volta com o resumo da senha. Recusar com erro fazia
+# aparecer "Nao foi possivel sincronizar o diretorio com o servidor" a cada
+# acesso (02/10). Entao aceitamos e IGNORAMOS o conteudo (nada e gravado):
+# resposta vazia = sucesso pro MrDeskPro; na proxima abertura ele recebe de
+# novo a lista do painel.
 @app.route("/api/ab", methods=["POST"])
 def catalogo_pro_somente_leitura():
-    return jsonify({"error": "A lista do MrDeskPro vem do painel e não pode ser alterada aqui."}), 403
+    if not _sessao_pro():
+        return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
+    return ("", 200)
 
 
 # Aba "Grupo" do MrDeskPro: depois do login ele pede grupos de dispositivos,

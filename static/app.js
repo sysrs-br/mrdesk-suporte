@@ -128,6 +128,7 @@ function mostrarApp() {
   document.getElementById("btn-menu-excluir-dispositivo").style.display = (usuarioAdmin || usuarioExcluirDevice) ? "flex" : "none";
   // Item 9: liberar nova máquina (Windows reinstalado) - só admin
   document.getElementById("btn-menu-liberar-maquina").style.display = usuarioAdmin ? "flex" : "none";
+  document.getElementById("btn-menu-licenca").style.display = usuarioAdmin ? "flex" : "none";
   carregarCatalogos();
   carregarTrafego();
 }
@@ -861,7 +862,7 @@ document.getElementById("corpo-tabela").addEventListener("click", async (e) => {
       const rect = btn.getBoundingClientRect();
       menu.style.display = "block";
       // Posiciona abaixo do botao; se nao couber embaixo, abre para cima
-      const alturaEstimada = usuarioAdmin ? 175 : 130;
+      const alturaEstimada = usuarioAdmin ? 210 : 130;
       if (rect.bottom + alturaEstimada > window.innerHeight) {
         menu.style.top = (rect.top - alturaEstimada) + "px";
       } else {
@@ -917,6 +918,10 @@ document.getElementById("menu-flutuante").addEventListener("click", async (e) =>
 
   if (acao === "auditoria") {
     abrirModalAuditoria(id);
+  }
+
+  if (acao === "licenca") {
+    abrirModalLicenca(id);
   }
 
   // Item 9: Windows reinstalado (mesmo ID, máquina nova) - apaga a máquina
@@ -975,6 +980,121 @@ function fecharModalMover() {
   document.getElementById("overlay-catalogo").style.display = "none";
 }
 document.getElementById("btn-cancelar-mover").addEventListener("click", fecharModalMover);
+
+// ---- Licença MR1 do dispositivo (item 30, só admin) ----
+// Informa o CNPJ, escolhe a licença (só as não antigas) e liga ao dispositivo.
+let idParaLicenca = null;
+
+function textoLicenca(l) {
+  return `${escapeHtml(l.nome || "(sem nome)")}<div class="licenca-item-linha2">Serial ${escapeHtml(l.serial)}`
+    + ` · versão ${escapeHtml(l.versao || "-")}${l.ativa === "S" ? "" : " · inativa"}`
+    + `${l.id_mrdesk ? " · ligada ao ID " + formatarId(l.id_mrdesk) : ""}</div>`;
+}
+
+function erroLicenca(msg) {
+  const el = document.getElementById("erro-licenca");
+  el.textContent = msg || "";
+  el.style.display = msg ? "block" : "none";
+}
+
+async function carregarLicencaAtual() {
+  const atual = document.getElementById("licenca-atual");
+  const btnDesligar = document.getElementById("btn-desligar-licenca");
+  atual.textContent = "Carregando...";
+  btnDesligar.style.display = "none";
+  try {
+    const resp = await fetch(`${API}/devices/${idParaLicenca}/licenca`, { headers: headersAuth() });
+    const data = await resp.json();
+    if (data.success && data.licenca) {
+      atual.innerHTML = "Licença ligada hoje: " + textoLicenca(data.licenca);
+      btnDesligar.style.display = "inline-block";
+    } else {
+      atual.textContent = "Nenhuma licença ligada a este dispositivo.";
+    }
+  } catch (err) {
+    atual.textContent = "";
+    erroLicenca("Erro ao consultar: " + err.message);
+  }
+}
+
+function abrirModalLicenca(id) {
+  idParaLicenca = id;
+  const dev = dispositivos.find(d => d.id === id);
+  document.getElementById("licenca-device").textContent = `${dev.cliente} (${dev.apelido}) — ID ${formatarId(id)}`;
+  document.getElementById("licenca-cnpj").value = "";
+  document.getElementById("lista-licencas").style.display = "none";
+  document.getElementById("lista-licencas").innerHTML = "";
+  erroLicenca("");
+  document.getElementById("overlay-licenca").style.display = "flex";
+  document.getElementById("licenca-cnpj").focus();
+  carregarLicencaAtual();
+}
+
+function fecharModalLicenca() {
+  document.getElementById("overlay-licenca").style.display = "none";
+}
+document.getElementById("btn-fechar-licenca").addEventListener("click", fecharModalLicenca);
+
+document.getElementById("form-licenca").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  erroLicenca("");
+  const lista = document.getElementById("lista-licencas");
+  const cnpj = document.getElementById("licenca-cnpj").value.trim();
+  if (!cnpj) { erroLicenca("Informe o CNPJ."); return; }
+  try {
+    const resp = await fetch(`${API}/licencas?cnpj=${encodeURIComponent(cnpj)}`, { headers: headersAuth() });
+    const data = await resp.json();
+    if (!data.success) { erroLicenca(data.error || "Erro na busca."); return; }
+    lista.innerHTML = "";
+    lista.style.display = "block";
+    if (!data.licencas.length) {
+      lista.innerHTML = '<div class="catalogo-mover-item" style="cursor:default;">Nenhuma licença (não antiga) com esse CNPJ.</div>';
+      return;
+    }
+    data.licencas.forEach((l) => {
+      const item = document.createElement("div");
+      item.className = "catalogo-mover-item licenca-item" + (l.id_mrdesk === idParaLicenca ? " atual" : "");
+      item.innerHTML = textoLicenca(l);
+      item.addEventListener("click", async () => {
+        if (l.id_mrdesk && l.id_mrdesk !== idParaLicenca &&
+            !confirm(`Essa licença está ligada ao ID ${formatarId(l.id_mrdesk)}. Passar para este dispositivo?`)) return;
+        try {
+          const r = await fetch(`${API}/devices/${idParaLicenca}/licenca`, {
+            method: "PUT", headers: headersAuth(), body: JSON.stringify({ cnpj: l.cnpj, serial: l.serial })
+          });
+          const d = await r.json();
+          if (d.success) {
+            fecharModalLicenca();
+            carregarDispositivos(true);
+          } else {
+            erroLicenca("Erro ao ligar: " + d.error);
+          }
+        } catch (err) {
+          erroLicenca("Erro ao ligar: " + err.message);
+        }
+      });
+      lista.appendChild(item);
+    });
+  } catch (err) {
+    erroLicenca("Erro na busca: " + err.message);
+  }
+});
+
+document.getElementById("btn-desligar-licenca").addEventListener("click", async () => {
+  if (!confirm("Desligar a licença deste dispositivo? A coluna Versão MR1 fica vazia para ele.")) return;
+  try {
+    const r = await fetch(`${API}/devices/${idParaLicenca}/licenca`, { method: "DELETE", headers: headersAuth() });
+    const d = await r.json();
+    if (d.success) {
+      fecharModalLicenca();
+      carregarDispositivos(true);
+    } else {
+      erroLicenca("Erro ao desligar: " + d.error);
+    }
+  } catch (err) {
+    erroLicenca("Erro ao desligar: " + err.message);
+  }
+});
 
 let idParaAuditoria = null;
 

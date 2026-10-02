@@ -165,7 +165,7 @@
   #sem-resultados { text-align: center; color: var(--texto-secundario); padding: 2rem; display: none; }
   #contador { margin-top: 10px; font-size: 12px; color: var(--texto-secundario); }
 
-  #overlay, #overlay-catalogo, #overlay-usuarios, #overlay-auditoria { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 100; }
+  #overlay, #overlay-catalogo, #overlay-usuarios, #overlay-auditoria, #overlay-licenca { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 100; }
   #overlay-form-usuario, #overlay-alterar-senha, #overlay-configuracoes { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 150; }
   #modal, #modal-catalogo, #modal-form-usuario, #modal-alterar-senha, #modal-configuracoes { background: #fff; border-radius: 12px; padding: 24px; width: 360px; }
   #modal-usuarios, #modal-auditoria { background: #fff; border-radius: 12px; padding: 24px; width: 820px; max-width: 95vw; max-height: 85vh; overflow-y: auto; }
@@ -200,6 +200,20 @@
   .catalogo-mover-item { padding: 10px 14px; cursor: pointer; font-size: 14px; border-bottom: 1px solid var(--cinza-borda); }
   .catalogo-mover-item:last-child { border-bottom: none; }
   .catalogo-mover-item:hover { background: var(--cinza-fundo); }
+  /* Licença MR1 do dispositivo (item 30) */
+  #modal-licenca { background: #fff; border-radius: 12px; padding: 24px; width: 520px; max-width: 95vw; }
+  #modal-licenca h2 { font-size: 16px; margin-top: 0; }
+  #modal-licenca label { display: block; font-size: 12px; color: var(--texto-secundario); margin-bottom: 4px; margin-top: 14px; }
+  #modal-licenca input[type="text"] { flex: 1; padding: 9px 10px; border: 1px solid var(--cinza-borda); border-radius: 8px; font-size: 14px; }
+  #modal-licenca .licenca-busca { display: flex; gap: 8px; }
+  #modal-licenca .licenca-busca .btn-primario { width: auto; padding: 8px 16px; }
+  #modal-licenca .rodape-modal { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+  #modal-licenca .btn-cancelar { background: none; border: 1px solid var(--cinza-borda); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
+  .licenca-device { font-size: 14px; font-weight: 600; }
+  .licenca-atual { font-size: 13px; color: var(--texto-secundario); margin-top: 6px; }
+  .licenca-item-linha2 { font-size: 12px; color: var(--texto-secundario); margin-top: 2px; }
+  .licenca-item.atual { background: #e3eefa; }
+  #erro-licenca { color: var(--vermelho); font-size: 12px; margin-top: 10px; display: none; }
 
   /* Tecnicos autorizados e Editar catalogo (item 6A) */
   #overlay-tecnicos { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 100; }

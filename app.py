@@ -981,6 +981,85 @@ def liberar_maquina(device_id):
 
 
 # ------------------------------------------------------------
+# LICENCA MR1 do dispositivo (item 30) - so admin. Liga a licenca do ERP
+# (licencas.id_mrdesk) ao dispositivo, pra coluna "Versao MR1" da lista.
+# Busca pelo CNPJ, so licencas com antigo = 'N'. Um dispositivo tem no maximo
+# uma licenca (ligar outra desliga a anterior); uma licenca ja ligada a outro
+# dispositivo passa pra este.
+# ------------------------------------------------------------
+def _licenca_json(r):
+    return {"cnpj": r["cnpj"], "serial": r["serial"], "nome": r["nome"], "versao": r["versao"],
+            "ativa": r["ativa"], "id_mrdesk": r["id_mrdesk"]}
+
+
+@app.route("/api/licencas", methods=["GET"])
+@require_auth
+@require_admin
+def buscar_licencas():
+    cnpj = "".join(c for c in (request.args.get("cnpj") or "") if c.isalnum()).upper()
+    if not cnpj:
+        return jsonify({"success": False, "error": "Informe o CNPJ"}), 400
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "SELECT cnpj, serial, nome, versao, ativa, id_mrdesk FROM licencas "
+        "WHERE cnpj = %s AND antigo = 'N' ORDER BY ativa DESC, nome, serial",
+        (cnpj[:14],)
+    )
+    licencas = [_licenca_json(r) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return jsonify({"success": True, "licencas": licencas})
+
+
+@app.route("/api/devices/<device_id>/licenca", methods=["GET"])
+@require_auth
+@require_admin
+def licenca_do_device(device_id):
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT cnpj, serial, nome, versao, ativa, id_mrdesk FROM licencas WHERE id_mrdesk = %s",
+                (device_id,))
+    r = cur.fetchone()
+    cur.close()
+    conn.close()
+    return jsonify({"success": True, "licenca": _licenca_json(r) if r else None})
+
+
+@app.route("/api/devices/<device_id>/licenca", methods=["PUT", "DELETE"])
+@require_auth
+@require_admin
+def ligar_licenca(device_id):
+    data = request.get_json(silent=True) or {}
+    cnpj = "".join(c for c in str(data.get("cnpj") or "") if c.isalnum()).upper()
+    serial = str(data.get("serial") or "").strip()
+    if request.method == "PUT" and (not cnpj or not serial):
+        return jsonify({"success": False, "error": "Informe o CNPJ e o serial"}), 400
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT 1 FROM devices WHERE id = %s", (device_id,))
+        if not cur.fetchone():
+            return jsonify({"success": False, "error": "Dispositivo nao encontrado"}), 404
+        # um dispositivo tem no maximo uma licenca: desliga a atual
+        cur.execute("UPDATE licencas SET id_mrdesk = NULL WHERE id_mrdesk = %s", (device_id,))
+        if request.method == "PUT":
+            cur.execute(
+                "UPDATE licencas SET id_mrdesk = %s WHERE cnpj = %s AND serial = %s AND antigo = 'N'",
+                (device_id, cnpj, serial)
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return jsonify({"success": False, "error": "Licença não encontrada"}), 404
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify({"success": True})
+
+
+# ------------------------------------------------------------
 # MOVER dispositivo de catalogo
 # ------------------------------------------------------------
 @app.route("/api/devices/<device_id>/catalogo", methods=["PUT"])

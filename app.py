@@ -854,7 +854,7 @@ def get_auditoria(device_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "SELECT inicio, fim, nome, origem, tipo, ip, permissao "
+        "SELECT inicio, fim, nome, origem, tipo, ip, permissao, autenticacao "
         "FROM auditoria WHERE dispositivo = %s AND inicio >= %s AND inicio < %s "
         "ORDER BY inicio DESC",
         (device_id, data_inicio, data_fim)
@@ -877,6 +877,7 @@ def get_auditoria(device_id):
             "origem": row["origem"],
             "permissao": row["permissao"],
             "tipo": TIPOS_ACESSO_AUDITORIA.get(row["tipo"], "Desconhecido") if row["tipo"] is not None else None,
+            "autenticacao": row["autenticacao"],
             "ip": row["ip"],
         })
 
@@ -1045,8 +1046,9 @@ def delete_device(device_id):
 # ------------------------------------------------------------
 # VERSAO DO ERP (item 30) - chamada pelo processo de build/atualizacao do ERP
 # ------------------------------------------------------------
-# POST /api/licencas/versao com cnpj, serial e versao (JSON, formulario ou na
-# URL) e usuario/senha por autenticacao basica do HTTP (no Indy:
+# GET ou POST /api/licencas/versao com cnpj, serial e versao (na URL, como o
+# ERP ja chama o licenca.php: ?cnpj=...&serial=...&versao=...; ou em JSON ou
+# formulario) e usuario/senha por autenticacao basica do HTTP (no Indy:
 # Request.Username / Request.Password com BasicAuthentication = True).
 # O usuario e a senha ficam no config.py (ERP_API_USUARIO / ERP_API_SENHA);
 # sem eles configurados a rota recusa tudo.
@@ -1064,7 +1066,7 @@ def _erp_autorizado():
             and hmac.compare_digest((auth.password or "").encode(), str(senha).encode()))
 
 
-@app.route("/api/licencas/versao", methods=["POST"])
+@app.route("/api/licencas/versao", methods=["GET", "POST"])
 def licenca_versao():
     if not _erp_autorizado():
         return (jsonify({"success": False, "error": "Nao autorizado"}), 401,
@@ -1203,6 +1205,25 @@ def heartbeat():
         return jsonify({})
     cur.execute("SELECT id FROM devices WHERE id = %s", (device_id,))
     if cur.fetchone():
+        # Item 34: o heartbeat traz as conexoes ativas ("conns" = conn_id; sem o
+        # campo = nenhuma). Acesso aberto que nao esta mais na lista terminou sem
+        # aviso de fechamento (MrDesk morto, queda de energia...): fecha agora.
+        # So mexe em acesso que ja passou do login (origem preenchida) e aberto
+        # ha mais de 1 minuto - quem esta na tela de senha nunca e fechado aqui.
+        ativos = data.get("conns")
+        if not isinstance(ativos, list):
+            ativos = []
+        try:
+            ativos = [int(c) % ACESSO_FATOR for c in ativos][:200]
+        except (TypeError, ValueError):
+            ativos = None
+        if ativos is not None:
+            cur.execute(
+                "UPDATE auditoria SET fim = NOW() WHERE dispositivo = %s AND fim IS NULL "
+                "AND origem IS NOT NULL AND inicio < NOW() - INTERVAL '1 minute' "
+                "AND NOT ((acesso %% %s) = ANY(%s::bigint[]))",
+                (str(device_id)[:20], ACESSO_FATOR, ativos)
+            )
         if ocioso is None:
             cur.execute("UPDATE devices SET ultima_vez_online = NOW() WHERE id = %s", (device_id,))
         else:
@@ -1691,6 +1712,73 @@ def catalogo_pro_somente_leitura():
     return jsonify({"error": "A lista do MrDeskPro vem do painel e não pode ser alterada aqui."}), 403
 
 
+# Aba "Grupo" do MrDeskPro: depois do login ele pede grupos de dispositivos,
+# usuarios e dispositivos acessiveis (recurso do servidor Pro do RustDesk).
+# Sem estas rotas o MrDeskPro mostrava "Nao foi possivel atualizar o grupo:
+# HTTP 404". Decisao do Celso (01/10): os nossos catalogos (tabela catalogos)
+# aparecem como grupos de dispositivos; os dispositivos sao os mesmos do
+# catalogo de enderecos (ativos, instalados e servidores). Usuarios: vazio.
+# Paginacao do RustDesk: ?current=N&pageSize=100 -> {"total", "data"}.
+# Sem sessao valida: 401 (o MrDeskPro sai do login).
+def _pagina_pro(itens):
+    try:
+        atual = max(int(request.args.get("current", 1)), 1)
+        tamanho = min(max(int(request.args.get("pageSize", 100)), 1), 500)
+    except (TypeError, ValueError):
+        atual, tamanho = 1, 100
+    inicio = (atual - 1) * tamanho
+    return jsonify({"total": len(itens), "data": itens[inicio:inicio + tamanho]})
+
+
+@app.route("/api/device-group/accessible", methods=["GET"])
+def grupos_pro():
+    if not _sessao_pro():
+        return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT nome FROM catalogos ORDER BY nome")
+    grupos = [{"name": (r[0] or "").strip()} for r in cur.fetchall() if (r[0] or "").strip()]
+    cur.close()
+    conn.close()
+    return _pagina_pro(grupos)
+
+
+@app.route("/api/users", methods=["GET"])
+def usuarios_pro():
+    if not _sessao_pro():
+        return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
+    return jsonify({"total": 0, "data": []})
+
+
+@app.route("/api/peers", methods=["GET"])
+def dispositivos_pro():
+    if not _sessao_pro():
+        return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "SELECT d.id, d.cliente, d.apelido, d.sistema, c.nome AS catalogo_nome "
+        "FROM devices d LEFT JOIN catalogos c ON c.catalogo = d.catalogo "
+        "WHERE d.ativo = 'S' AND d.instalado = 'S' AND d.servidor = 'S' "
+        "ORDER BY d.cliente, d.apelido"
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    itens = [{
+        "id": r["id"],
+        # card: cliente a esquerda (username) e apelido a direita (device_name)
+        "info": {"username": r["cliente"] or "", "device_name": r["apelido"] or "",
+                 "os": r["sistema"] or ""},
+        "status": 1,
+        "user": "",
+        "user_name": "",
+        "device_group_name": (r["catalogo_nome"] or "").strip(),
+        "note": "",
+    } for r in rows]
+    return _pagina_pro(itens)
+
+
 # ------------------------------------------------------------
 # AUDITORIA de conexoes (RustDesk /api/audit/conn)
 # ------------------------------------------------------------
@@ -1729,14 +1817,19 @@ _AUDIT_SET = """
     nome      = COALESCE(%(nome)s, auditoria.nome),
     tipo      = COALESCE(%(tipo)s, auditoria.tipo),
     uuid      = COALESCE(%(uuid)s, auditoria.uuid),
-    fim       = CASE WHEN %(fecha)s THEN COALESCE(auditoria.fim, NOW()) ELSE auditoria.fim END,
+    fim       = CASE WHEN %(fecha)s THEN NOW()      -- fechamento real vale mais que o automatico
+                     WHEN %(login)s THEN NULL       -- login reabre a linha (item 34)
+                     ELSE auditoria.fim END,
+    autenticacao = COALESCE(%(autenticacao)s, auditoria.autenticacao),
     permissao = COALESCE(%(permissao)s, auditoria.permissao)
 """
 
 _AUDIT_INSERT = """
-    INSERT INTO auditoria (dispositivo, acesso, sessao, ip, origem, nome, tipo, uuid, inicio, fim, permissao)
+    INSERT INTO auditoria (dispositivo, acesso, sessao, ip, origem, nome, tipo, uuid, inicio, fim, permissao,
+                           autenticacao)
     VALUES (%(dispositivo)s, {acesso}, %(sessao)s, %(ip)s, %(origem)s, %(nome)s, %(tipo)s, %(uuid)s,
-            NOW(), CASE WHEN %(fecha)s THEN NOW() ELSE NULL END, COALESCE(%(permissao)s, 'P'))
+            NOW(), CASE WHEN %(fecha)s THEN NOW() ELSE NULL END, COALESCE(%(permissao)s, 'P'),
+            %(autenticacao)s)
 """
 
 
@@ -1783,6 +1876,13 @@ def audit_conn():
             nome = peer[1] if len(peer) > 1 else None
         tipo = data.get("type")
 
+    # Item 33: como o acesso foi autorizado (o MrDesk manda "primary_auth" no
+    # aviso de login): 1 aceite na tela, 2 senha temporaria, 3 senha permanente,
+    # 4 troca de lado.
+    autenticacao = data.get("primary_auth")
+    if autenticacao not in (1, 2, 3, 4):
+        autenticacao = None
+
     p = {
         "dispositivo": str(dispositivo)[:20],
         "acesso": acesso,
@@ -1795,7 +1895,9 @@ def audit_conn():
         "tipo": tipo,
         "uuid": _uuid_recebido(data),
         "fecha": action == "close",
+        "login": not action,
         "permissao": permissao,
+        "autenticacao": autenticacao,
     }
 
     conn = get_db()

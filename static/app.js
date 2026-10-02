@@ -128,7 +128,6 @@ function mostrarApp() {
   document.getElementById("btn-menu-excluir-dispositivo").style.display = (usuarioAdmin || usuarioExcluirDevice) ? "flex" : "none";
   // Item 9: liberar nova máquina (Windows reinstalado) - só admin
   document.getElementById("btn-menu-liberar-maquina").style.display = usuarioAdmin ? "flex" : "none";
-  document.getElementById("separador-menu-liberar").style.display = usuarioAdmin ? "block" : "none";
   carregarCatalogos();
   carregarTrafego();
 }
@@ -150,7 +149,9 @@ function formatarGB(bytes) {
   return (bytes / 1024 ** 3).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
 }
 
-async function atualizarPizza(idElemento, rota, montarHint, avisarAcimaDe80 = true) {
+// limites: { vermelho, amarelo } = a partir de quantos % a pizza muda de cor
+// (padrão, 02/10: amarela acima de 60%, vermelha acima de 70%; false = nunca muda).
+async function atualizarPizza(idElemento, rota, montarHint, limites = { amarelo: 60.01, vermelho: 70.01 }) {
   const el = document.getElementById(idElemento);
   try {
     const resp = await fetch(`${API}/${rota}`, { headers: headersAuth() });
@@ -159,7 +160,10 @@ async function atualizarPizza(idElemento, rota, montarHint, avisarAcimaDe80 = tr
     if (data.success) {
       const pct = Math.min(100, Math.max(0, Number(data.percentual) || 0));
       el.style.setProperty("--pct", pct);
-      el.classList.toggle("alerta", avisarAcimaDe80 && pct >= 80);
+      const vermelha = !!limites && limites.vermelho !== undefined && pct >= limites.vermelho;
+      const amarela = !vermelha && !!limites && limites.amarelo !== undefined && pct >= limites.amarelo;
+      el.classList.toggle("alerta", vermelha);
+      el.classList.toggle("aviso", amarela);
       el.title = montarHint(pct, data);
       el.style.display = "block";
     } else {
@@ -326,7 +330,7 @@ document.getElementById("form-configuracoes").addEventListener("submit", (e) => 
   const valor = document.getElementById("config-versao-minima").value.trim();
   const erroEl = document.getElementById("erro-configuracoes");
   if (valor && !versaoValida(valor)) {
-    erroEl.textContent = "Use só números separados por ponto (ex.: 2.10.3).";
+    erroEl.textContent = "Use só números separados por ponto (ex.: 21.8.0.1).";
     erroEl.style.display = "block";
     return;
   }
@@ -561,9 +565,33 @@ async function carregarDispositivos(silencioso = false) {
     dispositivos = data.devices || [];
     renderizarTabela();
     if (silencioso && caixa) caixa.scrollTop = rolagem;
+    else restaurarRolagemDoF5();
   } catch (err) {
     if (!silencioso) alert("Erro ao carregar dispositivos: " + err.message);
   }
+}
+
+// F5: a lista volta na mesma posição. Ao sair da página guarda a rolagem e o
+// catálogo (só nesta aba); na primeira carga depois do F5, se o catálogo é o
+// mesmo, restaura. Vale uma vez só (trocar de catálogo/filtro começa do topo).
+const CHAVE_ROLAGEM_F5 = "mrdesk_rolagem_lista";
+let rolagemDoF5Pendente = true;
+window.addEventListener("pagehide", () => {
+  const caixa = document.querySelector("main > .tabela-wrapper");
+  if (!caixa || !catalogoAtual) return;
+  try {
+    sessionStorage.setItem(CHAVE_ROLAGEM_F5, JSON.stringify({ catalogo: String(catalogoAtual.catalogo), topo: caixa.scrollTop }));
+  } catch (_) {}
+});
+function restaurarRolagemDoF5() {
+  if (!rolagemDoF5Pendente) return;
+  rolagemDoF5Pendente = false;
+  try {
+    const salvo = JSON.parse(sessionStorage.getItem(CHAVE_ROLAGEM_F5) || "null");
+    sessionStorage.removeItem(CHAVE_ROLAGEM_F5);
+    const caixa = document.querySelector("main > .tabela-wrapper");
+    if (salvo && caixa && catalogoAtual && salvo.catalogo === String(catalogoAtual.catalogo)) caixa.scrollTop = salvo.topo;
+  } catch (_) {}
 }
 
 // Item 14: atualiza a lista (on-line/off-line, inativo) a cada 5 min, sem
@@ -952,6 +980,8 @@ let idParaAuditoria = null;
 
 // Coluna "permissao" da auditoria (controle de acesso - item 6A)
 const TEXTO_PERMISSAO = { P: "Permitida", B: "Bloqueada", F: "Falha na verificação" };
+// Coluna "autenticacao" (item 33): como o acesso foi autorizado no MrDesk
+const TEXTO_AUTENTICACAO = { 1: "Aceite na tela", 2: "Senha temporária", 3: "Senha permanente", 4: "Troca de lado" };
 
 function formatarDataHora(isoString) {
   if (!isoString) return "-";
@@ -982,7 +1012,7 @@ async function carregarAuditoria() {
   const inicio = document.getElementById("auditoria-data-inicio").value;
   const fim = document.getElementById("auditoria-data-fim").value;
   const corpo = document.getElementById("corpo-tabela-auditoria");
-  corpo.innerHTML = "<tr><td colspan=\"7\">Carregando...</td></tr>";
+  corpo.innerHTML = "<tr><td colspan=\"8\">Carregando...</td></tr>";
 
   try {
     const resp = await fetch(
@@ -993,12 +1023,12 @@ async function carregarAuditoria() {
     const data = await resp.json();
 
     if (!data.success) {
-      corpo.innerHTML = `<tr><td colspan="7">Erro ao carregar: ${data.error || ""}</td></tr>`;
+      corpo.innerHTML = `<tr><td colspan="8">Erro ao carregar: ${data.error || ""}</td></tr>`;
       return;
     }
 
     if (data.registros.length === 0) {
-      corpo.innerHTML = "<tr><td colspan=\"7\">Nenhuma conexão encontrada no período.</td></tr>";
+      corpo.innerHTML = "<tr><td colspan=\"8\">Nenhuma conexão encontrada no período.</td></tr>";
       return;
     }
 
@@ -1011,13 +1041,14 @@ async function carregarAuditoria() {
         <td>${escapeHtml(r.nome || "-")}</td>
         <td style="text-align:right;">${r.origem ? formatarId(r.origem) : "-"}</td>
         <td>${r.tipo || "-"}</td>
+        <td>${TEXTO_AUTENTICACAO[r.autenticacao] || "-"}</td>
         <td class="permissao-${r.permissao || ""}">${TEXTO_PERMISSAO[r.permissao] || "-"}</td>
         <td class="col-ip">${r.ip || "-"}</td>
       `;
       corpo.appendChild(tr);
     });
   } catch (err) {
-    corpo.innerHTML = `<tr><td colspan="7">Erro ao carregar: ${err.message}</td></tr>`;
+    corpo.innerHTML = `<tr><td colspan="8">Erro ao carregar: ${err.message}</td></tr>`;
   }
 }
 

@@ -18,3 +18,14 @@ RUSTDESK_ID_SERVER = "mrdesk.sysrs.com.br"
 
 # Chave secreta dos tokens de login do painel
 APP_SECRET_KEY = "..."
+
+# Endereco do painel (vai nos links de senha enviados por e-mail)
+PAINEL_URL = "https://mrdesk.sysrs.com.br"
+
+# Envio de e-mail (link para criar/redefinir senha e aviso de senha alterada)
+SMTP_HOST = "..."                # ex.: smtp.seudominio.com.br
+SMTP_PORT = 587
+SMTP_SEGURANCA = "starttls"      # "starttls" (porta 587) ou "ssl" (porta 465)
+SMTP_USUARIO = "..."             # conta que envia
+SMTP_SENHA = "..."
+SMTP_REMETENTE = "MrDesk <naoresponda@sysrs.com.br>"

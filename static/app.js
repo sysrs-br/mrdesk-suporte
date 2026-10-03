@@ -1,8 +1,10 @@
 const API = "/api";
 let token = localStorage.getItem("mrdesk_token");
 let nomeUsuario = localStorage.getItem("mrdesk_nome");
+// Item 41: só admin entra no painel. usuarioSuper = superadmin (cria os admins
+// das empresas); senão é o admin de uma empresa (cria os técnicos dele).
 let usuarioAdmin = localStorage.getItem("mrdesk_admin") === "1";
-let usuarioExcluirDevice = localStorage.getItem("mrdesk_excluir_device") === "1";
+let usuarioSuper = localStorage.getItem("mrdesk_super") === "1";
 let dispositivos = [];
 let catalogos = [];
 let catalogoAtual = null;
@@ -16,7 +18,37 @@ const ICONE_PONTOS = '<svg class="icon" viewBox="0 0 24 24" style="stroke-width:
 const ICONE_CATALOGO = '<svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>';
 const ICONE_EDITAR = '<svg class="icon" viewBox="0 0 24 24"><path d="M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>';
 const ICONE_REMOVER = '<svg class="icon" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>';
+const ICONE_EMAIL = '<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>';
 const ICONE_MOVER = '<svg class="icon" viewBox="0 0 24 24"><path d="M4 20h9"/><path d="M4 4h6v6H4z"/><path d="M15 7h6M18 4l3 3-3 3"/></svg>';
+
+// Botão de mostrar/ocultar em todo campo de senha (login, criar senha, alterar senha)
+const ICONE_OLHO = '<svg class="icon" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const ICONE_OLHO_FECHADO = '<svg class="icon" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/></svg>';
+document.querySelectorAll('input[type="password"]').forEach(campo => {
+  const caixa = document.createElement("span");
+  caixa.className = "campo-senha";
+  campo.parentNode.insertBefore(caixa, campo);
+  caixa.appendChild(campo);
+  const olho = document.createElement("button");
+  olho.type = "button";
+  olho.className = "olho-senha";
+  olho.tabIndex = -1;
+  olho.title = "Mostrar a senha";
+  olho.innerHTML = ICONE_OLHO;
+  olho.addEventListener("click", () => {
+    const mostrar = campo.type === "password";
+    campo.type = mostrar ? "text" : "password";
+    olho.innerHTML = mostrar ? ICONE_OLHO_FECHADO : ICONE_OLHO;
+    olho.title = mostrar ? "Ocultar a senha" : "Mostrar a senha";
+  });
+  caixa.appendChild(olho);
+  // Formulário limpo (modal reaberto): a senha volta a ficar oculta
+  if (campo.form) campo.form.addEventListener("reset", () => {
+    campo.type = "password";
+    olho.innerHTML = ICONE_OLHO;
+    olho.title = "Mostrar a senha";
+  });
+});
 
 function headersAuth() {
   return { "Authorization": "Bearer " + token, "Content-Type": "application/json" };
@@ -123,9 +155,10 @@ function mostrarApp() {
   document.getElementById("app").style.display = "flex";
   document.getElementById("nome-usuario").textContent = nomeUsuario;
   document.getElementById("btn-gerenciar-usuarios").style.display = usuarioAdmin ? "flex" : "none";
-  document.getElementById("btn-tecnicos-autorizados").style.display = usuarioAdmin ? "flex" : "none";
+  // Técnicos autorizados e exclusão de dispositivo: só o admin da empresa (não o superadmin)
+  document.getElementById("btn-tecnicos-autorizados").style.display = (usuarioAdmin && !usuarioSuper) ? "flex" : "none";
   document.getElementById("separador-menu-usuario").style.display = usuarioAdmin ? "block" : "none";
-  document.getElementById("btn-menu-excluir-dispositivo").style.display = (usuarioAdmin || usuarioExcluirDevice) ? "flex" : "none";
+  document.getElementById("btn-menu-excluir-dispositivo").style.display = (usuarioAdmin && !usuarioSuper) ? "flex" : "none";
   // Item 9: liberar nova máquina (Windows reinstalado) - só admin
   document.getElementById("btn-menu-liberar-maquina").style.display = usuarioAdmin ? "flex" : "none";
   document.getElementById("btn-menu-licenca").style.display = usuarioAdmin ? "flex" : "none";
@@ -206,9 +239,17 @@ async function carregarTrafego() {
   timerTrafego = setTimeout(() => { if (token) carregarTrafego(); }, 5 * 60 * 1000);
 }
 
+// Cartões da tela de login: "form-login", "form-esqueci" ou "form-definir-senha"
+function mostrarCartaoLogin(id) {
+  ["form-login", "form-esqueci", "form-definir-senha"].forEach(f => {
+    document.getElementById(f).style.display = f === id ? "block" : "none";
+  });
+}
+
 function mostrarLogin() {
   document.getElementById("tela-login").style.display = "flex";
   document.getElementById("app").style.display = "none";
+  mostrarCartaoLogin("form-login");
   // Reforca a limpeza mesmo se o navegador tentar autopreencher a senha
   // salva (autofill do proprio gerenciador de senhas) ao carregar a tela.
   document.getElementById("login-senha").value = "";
@@ -227,7 +268,114 @@ if (filtroInstaladoSalvo !== null) {
   document.getElementById("check-instalado").checked = filtroInstaladoSalvo === "1";
 }
 
-if (token) { mostrarApp(); } else { mostrarLogin(); }
+// Link de senha recebido por e-mail: https://.../?senha=<código>
+const codigoLinkSenha = new URLSearchParams(location.search).get("senha");
+if (codigoLinkSenha) {
+  abrirDefinirSenha();
+} else if (token) { mostrarApp(); } else { mostrarLogin(); }
+
+// ---- Criar/redefinir a senha pelo link do e-mail (item 41) ----
+function msgLogin(id, texto, tipo) {
+  const el = document.getElementById(id);
+  el.textContent = texto || "";
+  el.className = "msg-login" + (texto ? " " + tipo : "");
+}
+
+async function abrirDefinirSenha() {
+  document.getElementById("tela-login").style.display = "flex";
+  document.getElementById("app").style.display = "none";
+  mostrarCartaoLogin("form-definir-senha");
+  const texto = document.getElementById("texto-definir-senha");
+  try {
+    const resp = await fetch(`${API}/senha/link?t=${encodeURIComponent(codigoLinkSenha)}`);
+    const data = await resp.json();
+    if (data.success) {
+      texto.textContent = `${data.nome}, crie a senha do login ${data.email}.`;
+      document.getElementById("campos-definir-senha").style.display = "block";
+    } else {
+      texto.textContent = "";
+      msgLogin("msg-definir-senha", data.error || "Link inválido.", "erro");
+    }
+  } catch (err) {
+    texto.textContent = "";
+    msgLogin("msg-definir-senha", "Não foi possível conectar ao servidor.", "erro");
+  }
+}
+
+function senhaForaDaRegra(senha) {
+  if (senha.length < 8) return "A senha deve ter pelo menos 8 caracteres.";
+  if (!/[A-Za-z]/.test(senha) || !/[0-9]/.test(senha)) return "A senha deve ter pelo menos uma letra e um número.";
+  return null;
+}
+
+document.getElementById("form-definir-senha").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const senha = document.getElementById("definir-senha-nova").value;
+  const confirmar = document.getElementById("definir-senha-confirmar").value;
+  if (senha !== confirmar) { msgLogin("msg-definir-senha", "A senha e a confirmação não conferem.", "erro"); return; }
+  const fora = senhaForaDaRegra(senha);
+  if (fora) { msgLogin("msg-definir-senha", fora, "erro"); return; }
+  const btn = document.getElementById("btn-definir-senha");
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`${API}/senha/definir`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ t: codigoLinkSenha, senha })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      document.getElementById("campos-definir-senha").style.display = "none";
+      document.getElementById("texto-definir-senha").textContent = "";
+      msgLogin("msg-definir-senha", data.admin
+        ? "Senha criada. Entre no painel com o seu e-mail e a senha nova."
+        : "Senha criada. Entre no MrDeskPro com o seu e-mail e a senha nova.", "ok");
+      document.getElementById("link-definir-voltar").style.display = data.admin ? "block" : "none";
+      if (data.admin && data.email) localStorage.setItem("mrdesk_ultimo_usuario", data.email);
+    } else {
+      msgLogin("msg-definir-senha", data.error || "Não foi possível salvar a senha.", "erro");
+    }
+  } catch (err) {
+    msgLogin("msg-definir-senha", "Não foi possível conectar ao servidor.", "erro");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Sai do link (tira o código do endereço) e vai pro login
+document.getElementById("link-definir-voltar").addEventListener("click", (e) => {
+  e.preventDefault();
+  location.href = location.pathname;
+});
+
+// ---- Esqueci minha senha (item 41) ----
+document.getElementById("link-esqueci-senha").addEventListener("click", (e) => {
+  e.preventDefault();
+  msgLogin("msg-esqueci", "", "");
+  document.getElementById("esqueci-email").value = document.getElementById("login-usuario").value.trim();
+  mostrarCartaoLogin("form-esqueci");
+});
+document.getElementById("link-voltar-login").addEventListener("click", (e) => {
+  e.preventDefault();
+  mostrarCartaoLogin("form-login");
+});
+document.getElementById("form-esqueci").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = document.getElementById("esqueci-email").value.trim();
+  const btn = document.getElementById("btn-esqueci");
+  btn.disabled = true;
+  try {
+    await fetch(`${API}/senha/esqueci`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    });
+    // Mesma mensagem exista o e-mail ou não (o servidor não revela quem tem cadastro)
+    msgLogin("msg-esqueci", "Se este e-mail estiver cadastrado, enviamos o link. Confira a caixa de entrada e o spam.", "ok");
+  } catch (err) {
+    msgLogin("msg-esqueci", "Não foi possível conectar ao servidor.", "erro");
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 const usuarioSalvo = localStorage.getItem("mrdesk_ultimo_usuario");
 if (usuarioSalvo) {
@@ -259,15 +407,16 @@ document.getElementById("form-login").addEventListener("submit", async (e) => {
       token = data.token;
       nomeUsuario = data.name;
       usuarioAdmin = !!data.admin;
-      usuarioExcluirDevice = !!data.excluir_device;
+      usuarioSuper = !!data.super;
       localStorage.setItem("mrdesk_token", token);
       localStorage.setItem("mrdesk_nome", nomeUsuario);
       localStorage.setItem("mrdesk_admin", usuarioAdmin ? "1" : "0");
-      localStorage.setItem("mrdesk_excluir_device", usuarioExcluirDevice ? "1" : "0");
+      localStorage.setItem("mrdesk_super", usuarioSuper ? "1" : "0");
+      localStorage.removeItem("mrdesk_excluir_device");
       localStorage.setItem("mrdesk_ultimo_usuario", usuario);
       mostrarApp();
     } else {
-      erroEl.textContent = data.error || "Usuário ou senha inválidos.";
+      erroEl.textContent = data.error || "E-mail ou senha inválidos.";
       erroEl.style.display = "block";
     }
   } catch (err) {
@@ -284,7 +433,7 @@ function sair() {
   localStorage.removeItem("mrdesk_token");
   localStorage.removeItem("mrdesk_nome");
   localStorage.removeItem("mrdesk_admin");
-  localStorage.removeItem("mrdesk_excluir_device");
+  localStorage.removeItem("mrdesk_super");
   token = null;
   document.getElementById("login-senha").value = "";
   mostrarLogin();
@@ -372,8 +521,9 @@ document.getElementById("form-alterar-senha").addEventListener("submit", async (
     return;
   }
 
-  if (senhaNova.length < 6) {
-    erroEl.textContent = "A nova senha deve ter pelo menos 6 caracteres.";
+  const fora = senhaForaDaRegra(senhaNova);
+  if (fora) {
+    erroEl.textContent = fora;
     erroEl.style.display = "block";
     return;
   }
@@ -385,8 +535,13 @@ document.getElementById("form-alterar-senha").addEventListener("submit", async (
     });
     const data = await resp.json();
     if (data.success) {
+      // As outras sessões caíram; esta continua com o token novo.
+      if (data.token) {
+        token = data.token;
+        localStorage.setItem("mrdesk_token", token);
+      }
       fecharModalAlterarSenha();
-      alert("Senha alterada com sucesso.");
+      alert("Senha alterada com sucesso. As outras sessões abertas foram encerradas.");
     } else {
       erroEl.textContent = data.error || "Erro ao alterar senha.";
       erroEl.style.display = "block";
@@ -1267,8 +1422,14 @@ document.getElementById("form-modal").addEventListener("submit", async (e) => {
 
 // ---- Gerenciar usuários ----
 
+// Item 41: o superadmin vê e cria os admins das empresas; o admin de empresa
+// vê e cria os técnicos dele. Ninguém define a senha de outro: o usuário
+// recebe um link por e-mail. Usuário não é excluído, só desativado.
+let nomeMasterUsuarios = "";
+
 function abrirModalUsuarios() {
   document.getElementById("overlay-usuarios").style.display = "flex";
+  document.getElementById("aviso-lista-usuarios").style.display = "none";
   carregarUsuarios();
 }
 
@@ -1276,6 +1437,17 @@ function fecharModalUsuarios() {
   document.getElementById("overlay-usuarios").style.display = "none";
 }
 document.getElementById("btn-fechar-usuarios").addEventListener("click", fecharModalUsuarios);
+
+function avisoListaUsuarios(texto, erro) {
+  const avisoEl = document.getElementById("aviso-lista-usuarios");
+  const erroEl = document.getElementById("erro-lista-usuarios");
+  avisoEl.style.display = "none";
+  erroEl.style.display = "none";
+  if (!texto) return;
+  const el = erro ? erroEl : avisoEl;
+  el.textContent = texto;
+  el.style.display = "block";
+}
 
 async function carregarUsuarios() {
   const erroEl = document.getElementById("erro-lista-usuarios");
@@ -1289,7 +1461,9 @@ async function carregarUsuarios() {
       erroEl.style.display = "block";
       return;
     }
-    usuarios = data.usuarios || data || [];
+    usuarios = data.usuarios || [];
+    usuarioSuper = !!data.super;
+    nomeMasterUsuarios = data.master_nome || nomeUsuario;
     renderizarTabelaUsuarios();
   } catch (err) {
     erroEl.textContent = "Erro ao carregar usuários: " + err.message;
@@ -1297,21 +1471,41 @@ async function carregarUsuarios() {
   }
 }
 
+function situacaoUsuario(u) {
+  if (u.ativo === "N") return '<span class="badge-nao">Inativo</span>';
+  if (u.aguardando_senha) return '<span class="badge-pendente" title="Ainda não criou a senha pelo link do e-mail">Aguardando senha</span>';
+  return '<span class="badge-sim">Ativo</span>';
+}
+
 function renderizarTabelaUsuarios() {
+  document.getElementById("titulo-lista-usuarios").textContent =
+    usuarioSuper ? "Administradores das empresas" : "Técnicos";
+  document.getElementById("cabecalho-tabela-usuarios").innerHTML = `
+    <tr>
+      <th>Nome</th>
+      ${usuarioSuper ? "<th>Empresa</th>" : ""}
+      <th>E-mail (login)</th>
+      ${usuarioSuper ? '<th class="centralizado" title="Número da senha permanente que a empresa usa no MrDesk">Acesso</th>' : ""}
+      <th class="centralizado">Situação</th>
+      <th>Último login</th>
+      <th class="acoes-linha">Ações</th>
+    </tr>`;
   const corpo = document.getElementById("corpo-tabela-usuarios");
   corpo.innerHTML = "";
   usuarios.forEach(u => {
     const tr = document.createElement("tr");
     const opacidade = u.ativo === "N" ? "opacity:0.5;" : "";
+    const tituloLink = u.aguardando_senha ? "Reenviar o e-mail para criar a senha" : "Enviar e-mail para redefinir a senha";
     tr.innerHTML = `
       <td style="${opacidade}">${escapeHtml(u.nome)}</td>
+      ${usuarioSuper ? `<td style="${opacidade}">${escapeHtml(u.empresa || "—")}</td>` : ""}
       <td style="${opacidade}">${escapeHtml(u.email || "—")}</td>
-      <td class="centralizado" style="${opacidade}"><span class="${u.admin === 'S' ? 'badge-sim' : 'badge-nao'}">${u.admin === 'S' ? 'Sim' : 'Não'}</span></td>
-      <td class="centralizado" style="${opacidade}"><span class="${u.excluir_device === 'S' ? 'badge-sim' : 'badge-nao'}">${u.excluir_device === 'S' ? 'Sim' : 'Não'}</span></td>
-      <td class="centralizado" style="${opacidade}"><span class="${u.ativo !== 'N' ? 'badge-sim' : 'badge-nao'}">${u.ativo !== 'N' ? 'Sim' : 'Não'}</span></td>
+      ${usuarioSuper ? `<td class="centralizado" style="${opacidade}">${u.acesso || "—"}</td>` : ""}
+      <td class="centralizado" style="${opacidade}">${situacaoUsuario(u)}</td>
+      <td style="${opacidade}">${u.ultimo_login ? formatarDataHora(u.ultimo_login) : "—"}</td>
       <td class="acoes-linha">
         <button title="Editar" data-acao="editar-usuario" data-id="${u.usuario}">${ICONE_EDITAR}</button>
-        ${u.admin === 'S' ? '' : `<button title="Remover" data-acao="excluir-usuario" data-id="${u.usuario}">${ICONE_REMOVER}</button>`}
+        ${u.ativo === "N" ? "" : `<button title="${tituloLink}" data-acao="link-usuario" data-id="${u.usuario}">${ICONE_EMAIL}</button>`}
       </td>`;
     corpo.appendChild(tr);
   });
@@ -1322,26 +1516,27 @@ document.getElementById("corpo-tabela-usuarios").addEventListener("click", async
   if (!btn) return;
   const id = btn.dataset.id;
   const acao = btn.dataset.acao;
+  const u = usuarios.find(x => String(x.usuario) === String(id));
 
   if (acao === "editar-usuario") {
-    const u = usuarios.find(x => String(x.usuario) === String(id));
     abrirModalUsuario(u);
   }
 
-  if (acao === "excluir-usuario") {
-    const u = usuarios.find(x => String(x.usuario) === String(id));
-    if (confirm(`Confirma a exclusão do usuário "${u.nome}"?`)) {
-      try {
-        const resp = await fetch(`${API}/usuarios/${id}`, { method: "DELETE", headers: headersAuth() });
-        const data = await resp.json();
-        if (data.success) {
-          carregarUsuarios();
-        } else {
-          alert("Erro ao excluir: " + data.error);
-        }
-      } catch (err) {
-        alert("Erro ao excluir: " + err.message);
-      }
+  if (acao === "link-usuario") {
+    const pergunta = u.aguardando_senha
+      ? `Reenviar para ${u.email} o e-mail com o link para criar a senha?`
+      : `Enviar para ${u.email} um e-mail com o link para redefinir a senha?\n(A senha atual continua valendo até o link ser usado.)`;
+    if (!confirm(pergunta)) return;
+    btn.disabled = true;
+    try {
+      const resp = await fetch(`${API}/usuarios/${id}/link`, { method: "POST", headers: headersAuth() });
+      if (resp.status === 401) { mostrarLogin(); return; }
+      const data = await resp.json();
+      avisoListaUsuarios(data.success ? data.aviso : (data.error || "Não foi possível enviar."), !data.success);
+    } catch (err) {
+      avisoListaUsuarios("Erro de conexão: " + err.message, true);
+    } finally {
+      btn.disabled = false;
     }
   }
 });
@@ -1352,23 +1547,42 @@ function abrirModalUsuario(u) {
   document.getElementById("erro-modal-usuario").style.display = "none";
   document.getElementById("form-usuario").reset();
 
+  // Tipo e master são definidos pelo servidor a partir de quem está logado;
+  // aqui aparecem só como informação (desabilitados).
+  const tipo = usuarioSuper ? "Administrador de empresa" : "Técnico (só MrDeskPro)";
+  document.getElementById("usuario-tipo").value = tipo;
+  document.getElementById("usuario-master").value = nomeMasterUsuarios;
+  document.getElementById("campos-usuario-empresa").style.display = usuarioSuper ? "block" : "none";
+  document.getElementById("usuario-empresa").required = usuarioSuper;
+
+  const email = document.getElementById("usuario-email");
+  const dica = document.getElementById("dica-usuario-email");
   if (u) {
-    document.getElementById("titulo-modal-usuario").textContent = "Editar usuário";
+    document.getElementById("titulo-modal-usuario").textContent = usuarioSuper ? "Editar administrador" : "Editar técnico";
     document.getElementById("usuario-id-original").value = u.usuario;
     document.getElementById("usuario-nome").value = u.nome;
-    document.getElementById("usuario-senha").required = false;
-    document.getElementById("label-senha-opcional").style.display = "inline";
-    document.getElementById("usuario-email").value = u.email || "";
+    email.value = u.email || "";
+    document.getElementById("usuario-empresa").value = u.empresa || "";
+    document.getElementById("usuario-acesso").value = String(u.acesso || 2);
     document.getElementById("usuario-observacoes").value = u.observacoes || "";
-    document.getElementById("usuario-excluir-device").checked = u.excluir_device === "S";
     document.getElementById("usuario-ativo").checked = u.ativo !== "N";
+    // E-mail fixo depois de criada a senha. Exceções: aguardando senha
+    // (corrigir digitação) e o superadmin trocando o admin da empresa.
+    email.disabled = !(u.aguardando_senha || usuarioSuper);
+    if (u.aguardando_senha) {
+      dica.textContent = "Ainda sem senha: se o e-mail estiver errado, corrija e um novo link será enviado.";
+    } else if (usuarioSuper) {
+      dica.textContent = "Trocar o e-mail passa a empresa para outra pessoa: a senha atual deixa de valer e o novo e-mail recebe o link.";
+    } else {
+      dica.textContent = "O e-mail não muda depois de criada a senha. Para outra pessoa, crie um novo técnico e desative este.";
+    }
   } else {
-    document.getElementById("titulo-modal-usuario").textContent = "Novo usuário";
+    document.getElementById("titulo-modal-usuario").textContent = usuarioSuper ? "Novo administrador de empresa" : "Novo técnico";
     document.getElementById("usuario-id-original").value = "";
-    document.getElementById("usuario-senha").required = true;
-    document.getElementById("label-senha-opcional").style.display = "none";
-    document.getElementById("usuario-excluir-device").checked = false;
+    document.getElementById("usuario-acesso").value = "2";
     document.getElementById("usuario-ativo").checked = true;
+    email.disabled = false;
+    dica.textContent = "O usuário recebe neste e-mail um link para criar a própria senha.";
   }
 
   document.getElementById("overlay-form-usuario").style.display = "flex";
@@ -1382,34 +1596,34 @@ document.getElementById("btn-cancelar-form-usuario").addEventListener("click", f
 document.getElementById("form-usuario").addEventListener("submit", async (e) => {
   e.preventDefault();
   const idOriginal = document.getElementById("usuario-id-original").value;
-  const nome = document.getElementById("usuario-nome").value.trim();
-  const senha = document.getElementById("usuario-senha").value;
-  const email = document.getElementById("usuario-email").value.trim();
-  const observacoes = document.getElementById("usuario-observacoes").value.trim();
-  const excluir_device = document.getElementById("usuario-excluir-device").checked ? "S" : "N";
-  const ativo = document.getElementById("usuario-ativo").checked ? "S" : "N";
   const erroEl = document.getElementById("erro-modal-usuario");
   erroEl.style.display = "none";
 
-  const editando = !!idOriginal;
-  const corpo = { nome, email, observacoes, excluir_device, ativo };
-  if (senha) corpo.senha = senha;
+  // "admin" e "master" não são enviados: o servidor decide por quem está logado.
+  const corpo = {
+    nome: document.getElementById("usuario-nome").value.trim(),
+    email: document.getElementById("usuario-email").value.trim(),
+    observacoes: document.getElementById("usuario-observacoes").value.trim(),
+    ativo: document.getElementById("usuario-ativo").checked ? "S" : "N"
+  };
+  if (usuarioSuper) {
+    corpo.empresa = document.getElementById("usuario-empresa").value.trim();
+    corpo.acesso = Number(document.getElementById("usuario-acesso").value);
+  }
 
+  const btn = e.target.querySelector('button[type="submit"]');
+  btn.disabled = true;
   try {
-    let resp;
-    if (editando) {
-      resp = await fetch(`${API}/usuarios/${idOriginal}`, {
-        method: "PUT", headers: headersAuth(), body: JSON.stringify(corpo)
-      });
-    } else {
-      resp = await fetch(`${API}/usuarios`, {
-        method: "POST", headers: headersAuth(), body: JSON.stringify(corpo)
-      });
-    }
+    const editando = !!idOriginal;
+    const resp = await fetch(editando ? `${API}/usuarios/${idOriginal}` : `${API}/usuarios`, {
+      method: editando ? "PUT" : "POST", headers: headersAuth(), body: JSON.stringify(corpo)
+    });
+    if (resp.status === 401) { mostrarLogin(); return; }
     const data = await resp.json();
     if (data.success) {
       fecharModalUsuario();
-      carregarUsuarios();
+      await carregarUsuarios();
+      avisoListaUsuarios(data.aviso || "", !!data.email_falhou);
     } else {
       erroEl.textContent = data.error || "Erro ao salvar.";
       erroEl.style.display = "block";
@@ -1417,6 +1631,8 @@ document.getElementById("form-usuario").addEventListener("submit", async (e) => 
   } catch (err) {
     erroEl.textContent = "Erro de conexão: " + err.message;
     erroEl.style.display = "block";
+  } finally {
+    btn.disabled = false;
   }
 });
 
@@ -1492,7 +1708,7 @@ async function preencherComboTecnicos(usuarioSelecionado) {
   const combo = document.getElementById("tecnico-usuario");
   combo.innerHTML = "";
   try {
-    const resp = await fetch(`${API}/usuarios`, { headers: headersAuth() });
+    const resp = await fetch(`${API}/usuarios?incluir_proprio=1`, { headers: headersAuth() });
     const data = await resp.json();
     const lista = (data.usuarios || []).filter(u => u.ativo !== "N" || String(u.usuario) === String(usuarioSelecionado));
     const vazio = document.createElement("option");

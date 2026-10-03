@@ -13,13 +13,36 @@
   <form class="card-login" id="form-login" autocomplete="off">
     <h1>MrDesk Suporte</h1>
     <p>Sysrs Tecnologia da Informação</p>
-    <input type="text" id="login-usuario" placeholder="Usuário" autocomplete="off" required>
+    <input type="text" id="login-usuario" placeholder="E-mail" autocomplete="off" required>
     <input type="password" id="login-senha" placeholder="Senha" autocomplete="new-password" required>
     <button type="submit" id="btn-entrar">
       <span class="spinner" id="spinner-entrar"></span>
       <span id="texto-btn-entrar">Entrar</span>
     </button>
     <div id="erro-login"></div>
+    <a href="#" class="link-login" id="link-esqueci-senha">Esqueci minha senha</a>
+  </form>
+
+  <form class="card-login" id="form-esqueci" autocomplete="off" style="display:none;">
+    <h1>Esqueci minha senha</h1>
+    <p>Informe o seu e-mail. Se ele estiver cadastrado, enviamos um link para você criar uma senha nova.</p>
+    <input type="text" id="esqueci-email" placeholder="E-mail" autocomplete="off" required>
+    <button type="submit" id="btn-esqueci">Enviar link</button>
+    <div class="msg-login" id="msg-esqueci"></div>
+    <a href="#" class="link-login" id="link-voltar-login">Voltar ao login</a>
+  </form>
+
+  <form class="card-login" id="form-definir-senha" autocomplete="off" style="display:none;">
+    <h1>Criar senha</h1>
+    <p id="texto-definir-senha">Conferindo o link...</p>
+    <div id="campos-definir-senha" style="display:none;">
+      <input type="password" id="definir-senha-nova" placeholder="Nova senha" autocomplete="new-password" required minlength="8">
+      <input type="password" id="definir-senha-confirmar" placeholder="Confirmar a nova senha" autocomplete="new-password" required minlength="8">
+      <div class="dica-login">Pelo menos 8 caracteres, com letra e número.</div>
+      <button type="submit" id="btn-definir-senha">Salvar senha</button>
+    </div>
+    <div class="msg-login" id="msg-definir-senha"></div>
+    <a href="#" class="link-login" id="link-definir-voltar">Ir para o login</a>
   </form>
 </div>
 
@@ -211,7 +234,7 @@
 
 <div id="overlay-usuarios">
   <div id="modal-usuarios">
-    <h2 style="text-align:center;">Gerenciar usuários</h2>
+    <h2 style="text-align:center;" id="titulo-lista-usuarios">Gerenciar usuários</h2>
     <div class="barra-acoes" style="margin-bottom:12px;">
       <button type="button" class="btn-primario" id="btn-novo-usuario">
         <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -220,19 +243,11 @@
     </div>
     <div class="tabela-wrapper">
       <table>
-        <thead>
-          <tr>
-            <th>Usuário</th>
-            <th>E-mail</th>
-            <th class="centralizado">Admin</th>
-            <th class="centralizado">Excluir dispositivos</th>
-            <th class="centralizado">Ativo</th>
-            <th class="acoes-linha">Ações</th>
-          </tr>
-        </thead>
+        <thead id="cabecalho-tabela-usuarios"></thead>
         <tbody id="corpo-tabela-usuarios"></tbody>
       </table>
     </div>
+    <div id="aviso-lista-usuarios" style="color:var(--verde);font-size:12px;margin-top:10px;display:none;"></div>
     <div id="erro-lista-usuarios" style="color:var(--vermelho);font-size:12px;margin-top:10px;display:none;"></div>
     <div class="rodape-modal">
       <button type="button" class="btn-cancelar" id="btn-fechar-usuarios">Fechar</button>
@@ -245,19 +260,30 @@
     <h2 id="titulo-modal-usuario">Novo usuário</h2>
     <form id="form-usuario">
       <input type="hidden" id="usuario-id-original">
-      <label>Nome de usuário</label>
-      <input type="text" id="usuario-nome" required>
-      <label>Senha <span id="label-senha-opcional" style="display:none;">(deixe em branco para manter a atual)</span></label>
-      <input type="password" id="usuario-senha" autocomplete="new-password">
-      <label>E-mail</label>
-      <input type="text" id="usuario-email">
+      <label>Nome</label>
+      <input type="text" id="usuario-nome" maxlength="100" required>
+      <label>E-mail (é o login)</label>
+      <input type="text" id="usuario-email" maxlength="100" required>
+      <div class="dica-campo" id="dica-usuario-email"></div>
+      <div id="campos-usuario-empresa" style="display:none;">
+        <label>Empresa</label>
+        <input type="text" id="usuario-empresa" maxlength="100">
+        <label>Senha permanente que a empresa usa no MrDesk</label>
+        <select id="usuario-acesso">
+          <option value="1">1. Sysrs</option>
+          <option value="2">2. Acesso 2</option>
+          <option value="3">3. Acesso 3</option>
+          <option value="4">4. Acesso 4</option>
+          <option value="5">5. Acesso 5</option>
+        </select>
+      </div>
       <label>Observações</label>
       <input type="text" id="usuario-observacoes">
+      <label>Tipo (definido por quem cria)</label>
+      <input type="text" id="usuario-tipo" disabled>
+      <label>Master</label>
+      <input type="text" id="usuario-master" disabled>
       <label style="display:flex;align-items:center;gap:6px;margin-top:14px;">
-        <input type="checkbox" id="usuario-excluir-device" style="width:auto;">
-        Pode excluir dispositivos
-      </label>
-      <label style="display:flex;align-items:center;gap:6px;margin-top:10px;">
         <input type="checkbox" id="usuario-ativo" checked style="width:auto;">
         Usuário ativo
       </label>
@@ -355,9 +381,10 @@
       <label>Senha atual</label>
       <input type="password" id="senha-atual" autocomplete="current-password" required>
       <label>Nova senha</label>
-      <input type="password" id="senha-nova" autocomplete="new-password" required minlength="6">
+      <input type="password" id="senha-nova" autocomplete="new-password" required minlength="8">
+      <div class="dica-campo">Pelo menos 8 caracteres, com letra e número. As outras sessões abertas são encerradas.</div>
       <label>Confirmar nova senha</label>
-      <input type="password" id="senha-nova-confirmar" autocomplete="new-password" required minlength="6">
+      <input type="password" id="senha-nova-confirmar" autocomplete="new-password" required minlength="8">
       <div id="erro-alterar-senha"></div>
       <div class="rodape-modal">
         <button type="button" class="btn-cancelar" id="btn-cancelar-alterar-senha">Cancelar</button>

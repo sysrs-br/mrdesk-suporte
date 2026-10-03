@@ -15,6 +15,9 @@ import sys
 import time
 import threading
 import hmac
+import re
+import smtplib
+from email.message import EmailMessage
 import config
 
 app = Flask(__name__)
@@ -133,12 +136,39 @@ def version_status():
     })
 
 
-def gerar_token(username, admin=False, excluir_device=False):
-    return serializer.dumps({
-        "username": username,
-        "admin": admin,
-        "excluir_device": excluir_device
-    })
+# ------------------------------------------------------------
+# SESSAO DO PAINEL (item 41)
+# ------------------------------------------------------------
+# O token guarda so o numero do usuario; tudo o mais (nome, tipo, se continua
+# ativo) e lido do banco a cada pedido. Assim a sessao cai na hora quando:
+#   - o usuario e desativado;
+#   - o admin da empresa dele (master) e desativado;
+#   - a senha e trocada (usuarios.senha_alterada posterior a criacao do token).
+# So admin entra no painel (superadmin e admin de empresa); tecnico usa o
+# MrDeskPro.
+def gerar_token(usuario_id):
+    return serializer.dumps({"u": usuario_id})
+
+
+_SQL_SESSAO = (
+    "SELECT u.usuario, u.nome, u.email, u.admin, u.master, u.ativo, "
+    "COALESCE(m.ativo, 'S') AS master_ativo, "
+    "(u.senha_alterada IS NULL OR u.senha_alterada <= to_timestamp(%s)::timestamp) AS sessao_ok "
+    "FROM usuarios u LEFT JOIN usuarios m ON m.usuario = u.master WHERE u.usuario = %s"
+)
+
+
+def _usuario_da_sessao(cur, usuario_id, emitido):
+    # Devolve a linha do usuario se a sessao criada em "emitido" (segundos
+    # desde 1970) continua valendo; senao None. Cursor comum (tupla).
+    cur.execute(_SQL_SESSAO, (emitido, usuario_id))
+    r = cur.fetchone()
+    if not r:
+        return None
+    usuario, nome, email, admin, master, ativo, master_ativo, sessao_ok = r
+    if ativo != "S" or master_ativo != "S" or not sessao_ok:
+        return None
+    return {"usuario": usuario, "nome": nome, "email": email, "admin": admin, "master": master}
 
 
 def require_auth(f):
@@ -149,19 +179,33 @@ def require_auth(f):
         if not token:
             return jsonify({"success": False, "error": "Login necessario"}), 401
         try:
-            data = serializer.loads(token, max_age=TOKEN_MAX_AGE)
-            request.usuario_logado = data["username"]
-            request.usuario_admin = data.get("admin", False)
-            request.usuario_excluir_device = data.get("excluir_device", False)
+            data, emitido = serializer.loads(token, max_age=TOKEN_MAX_AGE, return_timestamp=True)
+            usuario_id = int(data["u"])
         except SignatureExpired:
             return jsonify({"success": False, "error": "Sessao expirada, faca login novamente"}), 401
-        except BadSignature:
-            return jsonify({"success": False, "error": "Token invalido"}), 401
+        except (BadSignature, KeyError, TypeError, ValueError):
+            # inclui os tokens antigos (anteriores ao item 41), que nao tem "u"
+            return jsonify({"success": False, "error": "Sessao expirada, faca login novamente"}), 401
+
+        conn = get_db()
+        cur = conn.cursor()
+        user = _usuario_da_sessao(cur, usuario_id, int(emitido.timestamp()))
+        cur.close()
+        conn.close()
+        if not user or user["admin"] != "S":
+            return jsonify({"success": False, "error": "Sessao expirada, faca login novamente"}), 401
+
+        request.usuario_id = user["usuario"]
+        request.usuario_logado = user["nome"]
+        request.usuario_email = user["email"]
+        request.usuario_admin = True
+        request.usuario_super = user["master"] is None
         return f(*args, **kwargs)
     return decorated
 
 
 def require_admin(f):
+    # Todo usuario do painel e admin (superadmin ou admin de empresa).
     @wraps(f)
     def decorated(*args, **kwargs):
         if not getattr(request, "usuario_admin", False):
@@ -170,12 +214,13 @@ def require_admin(f):
     return decorated
 
 
-def require_excluir_device(f):
+def require_admin_empresa(f):
+    # So o admin de empresa (o superadmin nao): tecnicos autorizados e
+    # exclusao de dispositivos.
     @wraps(f)
     def decorated(*args, **kwargs):
-        pode = getattr(request, "usuario_admin", False) or getattr(request, "usuario_excluir_device", False)
-        if not pode:
-            return jsonify({"success": False, "error": "Sem permissao para excluir dispositivos"}), 403
+        if getattr(request, "usuario_super", True):
+            return jsonify({"success": False, "error": "Acesso restrito ao administrador da empresa"}), 403
         return f(*args, **kwargs)
     return decorated
 
@@ -302,99 +347,422 @@ def get_db():
 
 
 # ------------------------------------------------------------
-# LOGIN
+# USUARIOS, LOGIN E SENHA (item 41)
 # ------------------------------------------------------------
+# Tres tipos de usuario (regras garantidas tambem por triggers no banco):
+#   superadmin       : master nulo, admin = 'S'. Um so. Cria e edita so os
+#                      admins de empresa.
+#   admin de empresa : admin = 'S', master = superadmin. Cria e edita so os
+#                      tecnicos dele. Entra no painel e no MrDeskPro.
+#   tecnico          : admin = 'N', master = admin da empresa. So MrDeskPro.
+# "admin" e "master" NUNCA sao lidos do que a tela manda: saem do usuario
+# logado (quem cria e o master; o superadmin cria admin, o admin cria tecnico).
+# Login = e-mail. Ninguem define a senha de outro: o usuario recebe por e-mail
+# um link (uso unico, 24 h) e cria a propria senha.
+PAINEL_URL = getattr(config, "PAINEL_URL", "https://mrdesk.sysrs.com.br").rstrip("/")
+serializer_link = URLSafeTimedSerializer(config.APP_SECRET_KEY, salt="link-senha")
+VALIDADE_LINK_SENHA = 60 * 60 * 24  # 24 horas
+TAMANHO_MINIMO_SENHA = 8
+_RE_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MSG_LINK_INVALIDO = "Link inválido ou vencido. Peça um novo em \"Esqueci minha senha\"."
+
+# Tentativas de login com senha errada, por e-mail + IP (em memoria, por
+# worker): 5 erros em 15 minutos bloqueiam aquele e-mail naquele IP ate a
+# janela passar. Vale pro painel e pro MrDeskPro juntos. (So pelo e-mail nao:
+# qualquer um travaria o login de outra pessoa errando a senha de proposito.)
+LIMITE_FALHAS_LOGIN = 5
+JANELA_FALHAS_LOGIN = 15 * 60
+_falhas_login = {}
+# Pedidos de "Esqueci minha senha": por IP e por e-mail.
+LIMITE_ESQUECI_POR_IP = 5          # a cada 15 minutos
+INTERVALO_ESQUECI_POR_EMAIL = 5 * 60
+_esqueci_por_ip = {}
+_esqueci_por_email = {}
+_limites_lock = threading.Lock()
+
+
+def _ip():
+    return request.headers.get("X-Real-IP") or request.remote_addr or None
+
+
+def _normalizar_email(valor):
+    return (valor or "").strip().lower()
+
+
+def _chave_login(email):
+    return f"{email}|{_ip() or '?'}"
+
+
+def _login_bloqueado(email):
+    email = _chave_login(email)
+    agora = time.time()
+    with _limites_lock:
+        janela = [t for t in _falhas_login.get(email, []) if agora - t < JANELA_FALHAS_LOGIN]
+        if janela:
+            _falhas_login[email] = janela
+        else:
+            _falhas_login.pop(email, None)
+        return len(janela) >= LIMITE_FALHAS_LOGIN
+
+
+def _registrar_falha_login(email):
+    email = _chave_login(email)
+    agora = time.time()
+    with _limites_lock:
+        if len(_falhas_login) > 10000:  # nao deixa crescer sem fim
+            for chave in [k for k, v in _falhas_login.items() if not v or agora - v[-1] >= JANELA_FALHAS_LOGIN]:
+                del _falhas_login[chave]
+        _falhas_login.setdefault(email, []).append(agora)
+
+
+def _limpar_falhas_login(email):
+    email = _chave_login(email)
+    with _limites_lock:
+        _falhas_login.pop(email, None)
+
+
+def _erro_regra_senha(senha):
+    if len(senha) < TAMANHO_MINIMO_SENHA:
+        return f"A senha deve ter pelo menos {TAMANHO_MINIMO_SENHA} caracteres."
+    if len(senha.encode()) > 72:
+        return "A senha deve ter no máximo 72 caracteres."
+    if not re.search(r"[A-Za-z]", senha) or not re.search(r"[0-9]", senha):
+        return "A senha deve ter pelo menos uma letra e um número."
+    return None
+
+
+def _senha_confere(senha, resumo):
+    # resumo nulo = usuario aguardando definir a senha: nunca confere.
+    if not resumo:
+        return False
+    try:
+        return bcrypt.checkpw(senha.encode(), resumo.encode())
+    except ValueError:
+        return False
+
+
+def _log_usuario(cur, usuario, acao, autor=None, detalhe=None, ip=None):
+    cur.execute(
+        "INSERT INTO log_usuarios (usuario, acao, autor, detalhe, ip) VALUES (%s, %s, %s, %s, %s)",
+        (usuario, acao, autor, (detalhe or None) and detalhe[:200], ip)
+    )
+
+
+def _enviar_email(destino, assunto, texto):
+    # Devolve (True, None) ou (False, motivo). Dados do envio no config.py.
+    host = getattr(config, "SMTP_HOST", "")
+    if not host:
+        return False, "envio de e-mail não configurado no servidor"
+    usuario = getattr(config, "SMTP_USUARIO", "")
+    msg = EmailMessage()
+    msg["Subject"] = assunto
+    msg["From"] = getattr(config, "SMTP_REMETENTE", "") or usuario
+    msg["To"] = destino
+    msg.set_content(texto)
+    try:
+        porta = int(getattr(config, "SMTP_PORT", 587))
+        seguranca = getattr(config, "SMTP_SEGURANCA", "starttls")
+        if seguranca == "ssl":
+            srv = smtplib.SMTP_SSL(host, porta, timeout=15)
+        else:
+            srv = smtplib.SMTP(host, porta, timeout=15)
+        with srv:
+            if seguranca == "starttls":
+                srv.starttls()
+            if usuario:
+                srv.login(usuario, getattr(config, "SMTP_SENHA", ""))
+            srv.send_message(msg)
+        return True, None
+    except Exception as e:
+        print(f"falha ao enviar e-mail para {destino}: {e}", file=sys.stderr, flush=True)
+        return False, "o servidor de e-mail recusou o envio"
+
+
+def _enviar_link_senha(usuario_id, motivo, autor=None, ip=None):
+    # Gera um link novo (o anterior deixa de valer), manda por e-mail e registra.
+    # motivo: "convite" (usuario novo ou e-mail trocado) ou "redefinicao".
+    # Devolve (True, None) ou (False, motivo da falha).
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT u.nome, u.email, u.admin, u.ativo, COALESCE(m.ativo, 'S') "
+        "FROM usuarios u LEFT JOIN usuarios m ON m.usuario = u.master WHERE u.usuario = %s",
+        (usuario_id,)
+    )
+    r = cur.fetchone()
+    if not r or r[3] != "S" or r[4] != "S":
+        cur.close()
+        conn.close()
+        return False, "usuário inativo"
+    nome, email, admin = r[0], r[1], r[2]
+
+    momento = int(time.time())
+    cur.execute("UPDATE usuarios SET link_senha = to_timestamp(%s)::timestamp WHERE usuario = %s",
+                (momento, usuario_id))
+    conn.commit()
+    link = f"{PAINEL_URL}/?senha={serializer_link.dumps({'u': usuario_id, 't': momento})}"
+
+    if admin == "S":
+        onde = f"Depois, você entra no painel ({PAINEL_URL}) e no MrDeskPro com este e-mail e a senha criada."
+    else:
+        onde = "Depois, você entra no MrDeskPro com este e-mail e a senha criada."
+    if motivo == "convite":
+        assunto = "MrDesk - crie a sua senha"
+        abertura = "Foi criado um usuário para você no MrDesk. Para criar a sua senha, abra o link abaixo:"
+    else:
+        assunto = "MrDesk - redefinição de senha"
+        abertura = "Recebemos um pedido para redefinir a sua senha do MrDesk. Para criar uma senha nova, abra o link abaixo:"
+    texto = (
+        f"Olá, {nome}.\n\n{abertura}\n\n{link}\n\n"
+        "O link vale por 24 horas e só pode ser usado uma vez.\n"
+        f"Seu login: {email}\n{onde}\n\n"
+        "Se você não esperava este e-mail, ignore-o: nada muda enquanto o link não for usado.\n"
+    )
+    ok, erro = _enviar_email(email, assunto, texto)
+    _log_usuario(cur, usuario_id, "L", autor,
+                 motivo + ("" if ok else " (falha no envio do e-mail)"), ip)
+    conn.commit()
+    cur.close()
+    conn.close()
+    return ok, erro
+
+
+def _avisar_senha_alterada(nome, email):
+    # Em segundo plano: quem trocou a senha nao espera o servidor de e-mail.
+    texto = (
+        f"Olá, {nome}.\n\nA senha do seu usuário no MrDesk ({email}) acabou de ser alterada.\n\n"
+        "Se foi você, não precisa fazer nada.\n"
+        f"Se não foi você, redefina a senha agora em {PAINEL_URL} (\"Esqueci minha senha\") "
+        "e avise o administrador.\n"
+    )
+    threading.Thread(target=_enviar_email, args=(email, "MrDesk - sua senha foi alterada", texto),
+                     daemon=True).start()
+
+
+def _usuario_do_link(cur, token):
+    # Devolve (usuario, nome, email, admin, tinha_senha) se o link vale; senao None.
+    try:
+        dados = serializer_link.loads(token or "", max_age=VALIDADE_LINK_SENHA)
+        usuario_id, momento = int(dados["u"]), int(dados["t"])
+    except (SignatureExpired, BadSignature, KeyError, TypeError, ValueError):
+        return None
+    cur.execute(
+        "SELECT u.usuario, u.nome, u.email, u.admin, u.senha IS NOT NULL "
+        "FROM usuarios u LEFT JOIN usuarios m ON m.usuario = u.master "
+        "WHERE u.usuario = %s AND u.link_senha = to_timestamp(%s)::timestamp "
+        "AND u.ativo = 'S' AND COALESCE(m.ativo, 'S') = 'S'",
+        (usuario_id, momento)
+    )
+    return cur.fetchone()
+
+
+# ---- Login do painel ----
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json(force=True, silent=True) or {}
     # Mesmo endereco do login do MrDeskPro (item 24): o RustDesk manda id/uuid.
     if data.get("uuid") and data.get("id"):
         return login_pro()
-    username = data.get("username")
-    password = data.get("password")
+    email = _normalizar_email(data.get("username"))
+    password = data.get("password") or ""
 
-    if not username or not password:
-        return jsonify({"success": False, "error": "Usuario e senha obrigatorios"}), 400
+    if not email or not password:
+        return jsonify({"success": False, "error": "E-mail e senha obrigatórios"}), 400
+    if _excedeu_limite_login_pro(_ip() or "?") or _login_bloqueado(email):
+        return jsonify({"success": False, "error": "Muitas tentativas. Aguarde alguns minutos e tente de novo."}), 429
 
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM usuarios WHERE nome = %s AND ativo = 'S'", (username,))
+    cur.execute(
+        "SELECT u.usuario, u.nome, u.senha, u.admin, u.master FROM usuarios u "
+        "LEFT JOIN usuarios m ON m.usuario = u.master "
+        "WHERE u.email = %s AND u.ativo = 'S' AND COALESCE(m.ativo, 'S') = 'S'",
+        (email,)
+    )
     user = cur.fetchone()
+
+    if not user or not _senha_confere(password, user["senha"]):
+        cur.close()
+        conn.close()
+        _registrar_falha_login(email)
+        return jsonify({"success": False, "error": "E-mail ou senha inválidos"}), 401
+
+    _limpar_falhas_login(email)
+    if user["admin"] != "S":
+        cur.close()
+        conn.close()
+        return jsonify({"success": False,
+                        "error": "O painel é só para administradores. Técnicos entram pelo MrDeskPro."}), 403
+
+    cur.execute("UPDATE usuarios SET ultimo_login = NOW() WHERE usuario = %s", (user["usuario"],))
+    conn.commit()
     cur.close()
     conn.close()
-
-    if not user or not bcrypt.checkpw(password.encode(), user["senha"].encode()):
-        return jsonify({"success": False, "error": "Usuario ou senha invalidos"}), 401
-
-    admin = user["admin"] == "S"
-    excluir_device = user["excluir_device"] == "S"
 
     return jsonify({
         "success": True,
         "name": user["nome"],
-        "admin": admin,
-        "excluir_device": excluir_device,
-        "token": gerar_token(user["nome"], admin=admin, excluir_device=excluir_device)
+        "admin": True,
+        "super": user["master"] is None,
+        "token": gerar_token(user["usuario"])
     })
 
 
-# ------------------------------------------------------------
-# ALTERAR A PROPRIA SENHA - qualquer usuario logado
-# ------------------------------------------------------------
+# ---- Alterar a propria senha (usuario logado no painel) ----
 @app.route("/api/usuarios/senha", methods=["PUT"])
 @require_auth
 def alterar_propria_senha():
-    data = request.get_json()
+    data = request.get_json(force=True, silent=True) or {}
     senha_atual = data.get("senha_atual") or ""
     nova_senha = data.get("nova_senha") or ""
 
     if not senha_atual or not nova_senha:
-        return jsonify({"success": False, "error": "Senha atual e nova senha sao obrigatorias"}), 400
-
-    if len(nova_senha) < 6:
-        return jsonify({"success": False, "error": "A nova senha deve ter pelo menos 6 caracteres"}), 400
+        return jsonify({"success": False, "error": "Senha atual e nova senha são obrigatórias"}), 400
+    erro = _erro_regra_senha(nova_senha)
+    if erro:
+        return jsonify({"success": False, "error": erro}), 400
 
     conn = get_db()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM usuarios WHERE nome = %s", (request.usuario_logado,))
-    user = cur.fetchone()
-
-    if not user or not bcrypt.checkpw(senha_atual.encode(), user["senha"].encode()):
+    cur = conn.cursor()
+    cur.execute("SELECT senha FROM usuarios WHERE usuario = %s", (request.usuario_id,))
+    row = cur.fetchone()
+    if not row or not _senha_confere(senha_atual, row[0]):
         cur.close()
         conn.close()
         return jsonify({"success": False, "error": "Senha atual incorreta"}), 401
 
     nova_senha_hash = bcrypt.hashpw(nova_senha.encode(), bcrypt.gensalt()).decode()
-    cur.close()
-
-    cur = conn.cursor()
     cur.execute(
-        "UPDATE usuarios SET senha=%s, alterado=NOW() WHERE usuario=%s",
-        (nova_senha_hash, user["usuario"])
+        "UPDATE usuarios SET senha = %s, senha_alterada = date_trunc('second', NOW()), "
+        "link_senha = NULL, alterado = NOW() WHERE usuario = %s",
+        (nova_senha_hash, request.usuario_id)
     )
+    _log_usuario(cur, request.usuario_id, "S", request.usuario_id, "alterada no painel", _ip())
     conn.commit()
     cur.close()
     conn.close()
 
+    _avisar_senha_alterada(request.usuario_logado, request.usuario_email)
+    # As outras sessoes cairam; esta continua com um token novo.
+    return jsonify({"success": True, "token": gerar_token(request.usuario_id)})
+
+
+# ---- Esqueci minha senha / definir senha pelo link (sem login) ----
+def _processar_esqueci(email, ip):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT u.usuario FROM usuarios u LEFT JOIN usuarios m ON m.usuario = u.master "
+        "WHERE u.email = %s AND u.ativo = 'S' AND COALESCE(m.ativo, 'S') = 'S'",
+        (email,)
+    )
+    r = cur.fetchone()
+    cur.close()
+    conn.close()
+    if r:
+        _enviar_link_senha(r[0], "redefinicao", None, ip)
+
+
+@app.route("/api/senha/esqueci", methods=["POST"])
+def esqueci_senha():
+    # Responde sempre a mesma coisa, exista o e-mail ou nao (nao revela quem
+    # tem cadastro). A consulta e o envio rodam em segundo plano.
+    data = request.get_json(force=True, silent=True) or {}
+    email = _normalizar_email(data.get("email"))
+    ip = _ip()
+    agora = time.time()
+    liberado = bool(email) and bool(_RE_EMAIL.match(email)) and len(email) <= 100
+    with _limites_lock:
+        janela = [t for t in _esqueci_por_ip.get(ip or "?", []) if agora - t < JANELA_FALHAS_LOGIN]
+        janela.append(agora)
+        _esqueci_por_ip[ip or "?"] = janela
+        if len(janela) > LIMITE_ESQUECI_POR_IP:
+            liberado = False
+        if liberado and agora - _esqueci_por_email.get(email, 0) < INTERVALO_ESQUECI_POR_EMAIL:
+            liberado = False
+        if liberado:
+            _esqueci_por_email[email] = agora
+        for tabela in (_esqueci_por_ip, _esqueci_por_email):
+            if len(tabela) > 10000:  # nao deixa crescer sem fim
+                tabela.clear()
+    if liberado:
+        threading.Thread(target=_processar_esqueci, args=(email, ip), daemon=True).start()
     return jsonify({"success": True})
 
 
-# ------------------------------------------------------------
-# USUARIOS (Item 18) - somente admin gerencia
-# ------------------------------------------------------------
+@app.route("/api/senha/link", methods=["GET"])
+def conferir_link_senha():
+    if _excedeu_limite_verificacao(_ip() or "?"):
+        return jsonify({"success": False, "error": "Muitas tentativas. Aguarde um minuto."}), 429
+    conn = get_db()
+    cur = conn.cursor()
+    r = _usuario_do_link(cur, request.args.get("t"))
+    cur.close()
+    conn.close()
+    if not r:
+        return jsonify({"success": False, "error": MSG_LINK_INVALIDO}), 400
+    return jsonify({"success": True, "nome": r[1], "email": r[2]})
+
+
+@app.route("/api/senha/definir", methods=["POST"])
+def definir_senha():
+    if _excedeu_limite_verificacao(_ip() or "?"):
+        return jsonify({"success": False, "error": "Muitas tentativas. Aguarde um minuto."}), 429
+    data = request.get_json(force=True, silent=True) or {}
+    senha = data.get("senha") or ""
+    erro = _erro_regra_senha(senha)
+    if erro:
+        return jsonify({"success": False, "error": erro}), 400
+
+    conn = get_db()
+    cur = conn.cursor()
+    r = _usuario_do_link(cur, data.get("t"))
+    if not r:
+        cur.close()
+        conn.close()
+        return jsonify({"success": False, "error": MSG_LINK_INVALIDO}), 400
+    usuario_id, nome, email, admin, tinha_senha = r
+
+    senha_hash = bcrypt.hashpw(senha.encode(), bcrypt.gensalt()).decode()
+    cur.execute(
+        "UPDATE usuarios SET senha = %s, senha_alterada = date_trunc('second', NOW()), "
+        "link_senha = NULL, alterado = NOW() WHERE usuario = %s",
+        (senha_hash, usuario_id)
+    )
+    _log_usuario(cur, usuario_id, "S", None,
+                 "redefinida pelo link" if tinha_senha else "primeira senha, pelo link", _ip())
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    _limpar_falhas_login(email)
+    if tinha_senha:
+        _avisar_senha_alterada(nome, email)
+    return jsonify({"success": True, "admin": admin == "S", "email": email})
+
+
+# ---- Cadastro de usuarios (subordinados de quem esta logado) ----
 @app.route("/api/usuarios", methods=["GET"])
 @require_auth
 @require_admin
 def list_usuarios():
+    # Superadmin: os admins de empresa. Admin de empresa: os tecnicos dele
+    # (com ?incluir_proprio=1, ele mesmo tambem - pro combo de Tecnicos autorizados).
+    proprio = request.args.get("incluir_proprio") == "1" and not request.usuario_super
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "SELECT usuario, nome, email, excluir_device, observacoes, admin, ativo, inclusao, alterado "
-        "FROM usuarios ORDER BY nome"
+        "SELECT usuario, nome, email, empresa, acesso, observacoes, admin, ativo, "
+        "senha IS NULL AS aguardando_senha, ultimo_login, inclusao, alterado "
+        "FROM usuarios WHERE master = %s OR (%s AND usuario = %s) ORDER BY nome",
+        (request.usuario_id, proprio, request.usuario_id)
     )
     rows = cur.fetchall()
     cur.close()
     conn.close()
+
+    def data_iso(v):
+        return v.isoformat() if v else None
 
     usuarios = []
     for r in rows:
@@ -402,140 +770,180 @@ def list_usuarios():
             "usuario": r["usuario"],
             "nome": r["nome"],
             "email": r["email"],
-            "excluir_device": r["excluir_device"],
+            "empresa": r["empresa"],
+            "acesso": r["acesso"],
             "observacoes": r["observacoes"],
             "admin": r["admin"],
             "ativo": r["ativo"],
-            "inclusao": r["inclusao"].isoformat() if r["inclusao"] else None,
-            "alterado": r["alterado"].isoformat() if r["alterado"] else None
+            "aguardando_senha": r["aguardando_senha"],
+            "ultimo_login": data_iso(r["ultimo_login"]),
+            "inclusao": data_iso(r["inclusao"]),
+            "alterado": data_iso(r["alterado"]),
         })
 
-    return jsonify({"success": True, "usuarios": usuarios})
+    return jsonify({"success": True, "usuarios": usuarios, "super": request.usuario_super,
+                    "master_nome": request.usuario_logado})
+
+
+def _dados_usuario(data):
+    # Le so o que a tela pode informar. "admin" e "master" nao entram aqui.
+    nome = (data.get("nome") or "").strip()
+    email = _normalizar_email(data.get("email"))
+    observacoes = (data.get("observacoes") or "").strip() or None
+    ativo = "N" if data.get("ativo") == "N" else "S"
+    if not nome or len(nome) > 100:
+        return None, "Informe o nome (até 100 caracteres)."
+    if not _RE_EMAIL.match(email) or len(email) > 100:
+        return None, "Informe um e-mail válido."
+    empresa, acesso = None, None
+    if request.usuario_super:
+        empresa = (data.get("empresa") or "").strip()
+        if not empresa or len(empresa) > 100:
+            return None, "Informe a empresa (até 100 caracteres)."
+        try:
+            acesso = int(data.get("acesso"))
+        except (TypeError, ValueError):
+            acesso = None
+        if acesso not in (1, 2, 3, 4, 5):
+            return None, "Informe o número do acesso (1 a 5)."
+    return {"nome": nome, "email": email, "observacoes": observacoes, "ativo": ativo,
+            "empresa": empresa, "acesso": acesso}, None
+
+
+def _resposta_link(ok, erro, texto_ok):
+    if ok:
+        return jsonify({"success": True, "aviso": texto_ok})
+    return jsonify({"success": True, "email_falhou": True,
+                    "aviso": f"Salvo, mas o e-mail não foi enviado ({erro}). Use \"Reenviar e-mail\" depois."})
 
 
 @app.route("/api/usuarios", methods=["POST"])
 @require_auth
 @require_admin
 def add_usuario():
-    data = request.get_json()
-    nome = (data.get("nome") or "").strip()
-    senha = data.get("senha") or ""
-    email = data.get("email")
-    excluir_device = data.get("excluir_device", "N")
-    observacoes = data.get("observacoes")
-    ativo = data.get("ativo", "S")
+    d, erro = _dados_usuario(request.get_json(force=True, silent=True) or {})
+    if erro:
+        return jsonify({"success": False, "error": erro}), 400
 
-    # Usuarios criados por essa tela nunca sao admin: so existe um admin
-    # (o cadastro original), e essa tela nao oferece meio de alterar isso.
-    admin = "N"
-
-    if excluir_device not in ("S", "N"):
-        excluir_device = "N"
-    if ativo not in ("S", "N"):
-        ativo = "S"
-
-    if not nome or not senha:
-        return jsonify({"success": False, "error": "nome e senha sao obrigatorios"}), 400
-
-    senha_hash = bcrypt.hashpw(senha.encode(), bcrypt.gensalt()).decode()
+    # Quem cria decide o tipo: superadmin cria admin de empresa; admin cria tecnico.
+    admin = "S" if request.usuario_super else "N"
 
     conn = get_db()
     cur = conn.cursor()
     try:
         cur.execute(
-            "INSERT INTO usuarios (nome, senha, email, excluir_device, observacoes, admin, ativo) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (nome, senha_hash, email, excluir_device, observacoes, admin, ativo)
+            "INSERT INTO usuarios (nome, email, observacoes, admin, ativo, master, empresa, acesso) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING usuario",
+            (d["nome"], d["email"], d["observacoes"], admin, d["ativo"], request.usuario_id,
+             d["empresa"], d["acesso"])
         )
+        novo_id = cur.fetchone()[0]
+        _log_usuario(cur, novo_id, "C", request.usuario_id, d["email"], _ip())
         conn.commit()
-        return jsonify({"success": True})
-    except psycopg2.IntegrityError:
+    except psycopg2.errors.UniqueViolation:
         conn.rollback()
-        return jsonify({"success": False, "error": "Ja existe um usuario com esse nome"}), 409
+        return jsonify({"success": False, "error": "Já existe um usuário com esse e-mail."}), 409
     finally:
         cur.close()
         conn.close()
+
+    if d["ativo"] != "S":
+        return jsonify({"success": True, "aviso": "Usuário criado inativo: o e-mail com o link será enviado quando você reenviar."})
+    ok, erro = _enviar_link_senha(novo_id, "convite", request.usuario_id, _ip())
+    return _resposta_link(ok, erro, f"Usuário criado. Enviamos para {d['email']} o link para criar a senha.")
 
 
 @app.route("/api/usuarios/<int:usuario_id>", methods=["PUT"])
 @require_auth
 @require_admin
 def edit_usuario(usuario_id):
-    data = request.get_json()
-    email = data.get("email")
-    excluir_device = data.get("excluir_device", "N")
-    observacoes = data.get("observacoes")
-    ativo = data.get("ativo", "S")
-    nova_senha = data.get("senha")  # opcional: so muda se vier preenchida
+    d, erro = _dados_usuario(request.get_json(force=True, silent=True) or {})
+    if erro:
+        return jsonify({"success": False, "error": erro}), 400
 
-    if excluir_device not in ("S", "N"):
-        excluir_device = "N"
-    if ativo not in ("S", "N"):
-        ativo = "S"
-
-    # O campo "admin" nao e alterado por essa tela (proposital: so existe
-    # um admin). Por isso ele fica de fora do UPDATE, preservando o valor
-    # atual no banco mesmo quando o proprio admin edita seu cadastro.
     conn = get_db()
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # So os subordinados de quem esta logado.
+    cur.execute(
+        "SELECT nome, email, observacoes, ativo, empresa, acesso, senha IS NULL AS aguardando "
+        "FROM usuarios WHERE usuario = %s AND master = %s",
+        (usuario_id, request.usuario_id)
+    )
+    atual = cur.fetchone()
+    if not atual:
+        cur.close()
+        conn.close()
+        return jsonify({"success": False, "error": "Usuário não encontrado"}), 404
 
-    if nova_senha:
-        senha_hash = bcrypt.hashpw(nova_senha.encode(), bcrypt.gensalt()).decode()
+    # E-mail: fixo depois de criado. Excecoes: enquanto aguarda a senha (corrigir
+    # digitacao) e o superadmin trocando o admin de uma empresa.
+    trocou_email = d["email"] != atual["email"]
+    if trocou_email and not (atual["aguardando"] or request.usuario_super):
+        cur.close()
+        conn.close()
+        return jsonify({"success": False,
+                        "error": "O e-mail não pode ser alterado depois que o usuário criou a senha. "
+                                 "Crie outro usuário e desative este."}), 400
+
+    ip = _ip()
+    try:
         cur.execute(
-            "UPDATE usuarios SET email=%s, excluir_device=%s, observacoes=%s, "
-            "ativo=%s, senha=%s, alterado=NOW() WHERE usuario=%s",
-            (email, excluir_device, observacoes, ativo, senha_hash, usuario_id)
+            "UPDATE usuarios SET nome = %s, email = %s, observacoes = %s, ativo = %s, "
+            "empresa = %s, acesso = %s, alterado = NOW() WHERE usuario = %s",
+            (d["nome"], d["email"], d["observacoes"], d["ativo"], d["empresa"], d["acesso"], usuario_id)
         )
-    else:
-        cur.execute(
-            "UPDATE usuarios SET email=%s, excluir_device=%s, observacoes=%s, "
-            "ativo=%s, alterado=NOW() WHERE usuario=%s",
-            (email, excluir_device, observacoes, ativo, usuario_id)
-        )
+        if trocou_email:
+            # Outro dono: a senha antiga deixa de valer e as sessoes caem.
+            cur.execute(
+                "UPDATE usuarios SET senha = NULL, senha_alterada = date_trunc('second', NOW()), "
+                "link_senha = NULL WHERE usuario = %s",
+                (usuario_id,)
+            )
+            _log_usuario(cur, usuario_id, "E", request.usuario_id, f"{atual['email']} -> {d['email']}", ip)
+        if d["ativo"] != atual["ativo"]:
+            _log_usuario(cur, usuario_id, "A" if d["ativo"] == "S" else "D", request.usuario_id, None, ip)
+        mudou = [c for c in ("nome", "observacoes", "empresa", "acesso") if d[c] != atual[c]]
+        if mudou:
+            _log_usuario(cur, usuario_id, "T", request.usuario_id, ", ".join(mudou), ip)
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        return jsonify({"success": False, "error": "Já existe um usuário com esse e-mail."}), 409
+    finally:
+        cur.close()
+        conn.close()
 
-    conn.commit()
-    updated = cur.rowcount
-    cur.close()
-    conn.close()
-
-    if updated == 0:
-        return jsonify({"success": False, "error": "Usuario nao encontrado"}), 404
-
+    if trocou_email and d["ativo"] == "S":
+        ok, erro = _enviar_link_senha(usuario_id, "convite", request.usuario_id, ip)
+        return _resposta_link(ok, erro, f"E-mail alterado. Enviamos para {d['email']} o link para criar a senha.")
     return jsonify({"success": True})
 
 
-@app.route("/api/usuarios/<int:usuario_id>", methods=["DELETE"])
+@app.route("/api/usuarios/<int:usuario_id>/link", methods=["POST"])
 @require_auth
 @require_admin
-def delete_usuario(usuario_id):
+def reenviar_link_usuario(usuario_id):
     conn = get_db()
     cur = conn.cursor()
-
-    # Nunca permite excluir o usuario admin, seja qual for o ID dele.
-    cur.execute("SELECT admin FROM usuarios WHERE usuario = %s", (usuario_id,))
-    row = cur.fetchone()
-    if row and row[0] == "S":
-        cur.close()
-        conn.close()
-        return jsonify({"success": False, "error": "Nao e permitido excluir o usuario administrador"}), 403
-
-    try:
-        cur.execute("DELETE FROM usuarios WHERE usuario = %s AND admin <> 'S'", (usuario_id,))
-        conn.commit()
-    except psycopg2.errors.ForeignKeyViolation:
-        # fk_tecnico_usuario: o usuario tem MrDeskPro em "Tecnicos autorizados".
-        conn.rollback()
-        cur.close()
-        conn.close()
-        return jsonify({"success": False, "error": "Usuário com MrDeskPro cadastrado em Técnicos autorizados não pode ser excluído; desative-o."}), 409
-    deleted = cur.rowcount
+    cur.execute(
+        "SELECT email, ativo, senha IS NULL FROM usuarios WHERE usuario = %s AND master = %s",
+        (usuario_id, request.usuario_id)
+    )
+    r = cur.fetchone()
     cur.close()
     conn.close()
+    if not r:
+        return jsonify({"success": False, "error": "Usuário não encontrado"}), 404
+    if r[1] != "S":
+        return jsonify({"success": False, "error": "Usuário inativo: ative antes de enviar o link."}), 400
+    ok, erro = _enviar_link_senha(usuario_id, "convite" if r[2] else "redefinicao", request.usuario_id, _ip())
+    if not ok:
+        return jsonify({"success": False, "error": f"O e-mail não foi enviado ({erro})."}), 502
+    return jsonify({"success": True, "aviso": f"Link enviado para {r[0]}."})
 
-    if deleted == 0:
-        return jsonify({"success": False, "error": "Usuario nao encontrado"}), 404
 
-    return jsonify({"success": True})
+# Usuario nao e excluido, so desativado: o historico (auditoria, log_usuarios,
+# tecnicos autorizados) aponta pra ele. Por isso nao existe rota de exclusao.
 
 
 # ------------------------------------------------------------
@@ -1092,7 +1500,7 @@ def mover_catalogo(device_id):
 # ------------------------------------------------------------
 @app.route("/api/devices/<device_id>", methods=["DELETE"])
 @require_auth
-@require_excluir_device
+@require_admin_empresa
 def delete_device(device_id):
     conn = get_db()
     cur = conn.cursor()
@@ -1412,9 +1820,18 @@ def _normalizar_id(valor):
     return "".join(str(valor or "").split())
 
 
+# Item 41: so o admin de empresa gerencia (o superadmin nao), e so os
+# MrDeskPro dele mesmo e dos tecnicos dele.
+def _usuario_da_conta(cur, usuario_id):
+    # True se o usuario e o admin logado ou um tecnico dele.
+    cur.execute("SELECT 1 FROM usuarios WHERE usuario = %s AND (usuario = %s OR master = %s)",
+                (usuario_id, request.usuario_id, request.usuario_id))
+    return cur.fetchone() is not None
+
+
 @app.route("/api/tecnicos", methods=["GET"])
 @require_auth
-@require_admin
+@require_admin_empresa
 def list_tecnicos():
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1425,7 +1842,9 @@ def list_tecnicos():
         "FROM tecnicos_autorizados t "
         "JOIN usuarios u ON u.usuario = t.usuario "
         "LEFT JOIN devices d ON d.id = t.dispositivo "
-        "ORDER BY u.nome, t.dispositivo"
+        "WHERE u.usuario = %s OR u.master = %s "
+        "ORDER BY u.nome, t.dispositivo",
+        (request.usuario_id, request.usuario_id)
     )
     rows = cur.fetchall()
     cur.close()
@@ -1475,7 +1894,7 @@ def _erro_integridade_tecnico(e):
 
 @app.route("/api/tecnicos", methods=["POST"])
 @require_auth
-@require_admin
+@require_admin_empresa
 def add_tecnico():
     dados, erro = _dados_tecnico(request.get_json() or {})
     if erro:
@@ -1483,6 +1902,10 @@ def add_tecnico():
 
     conn = get_db()
     cur = conn.cursor()
+    if not _usuario_da_conta(cur, dados[1]):
+        cur.close()
+        conn.close()
+        return jsonify({"success": False, "error": "Técnico (usuário) não encontrado."}), 400
     try:
         cur.execute(
             "INSERT INTO tecnicos_autorizados (dispositivo, usuario, descricao, ativo) "
@@ -1502,7 +1925,7 @@ def add_tecnico():
 # Editar (inclusive trocar o ID: e a chave, mas nada aponta pra essa tabela).
 @app.route("/api/tecnicos/<dispositivo_original>", methods=["PUT"])
 @require_auth
-@require_admin
+@require_admin_empresa
 def edit_tecnico(dispositivo_original):
     dados, erro = _dados_tecnico(request.get_json() or {})
     if erro:
@@ -1511,11 +1934,18 @@ def edit_tecnico(dispositivo_original):
 
     conn = get_db()
     cur = conn.cursor()
+    if not _usuario_da_conta(cur, usuario):
+        cur.close()
+        conn.close()
+        return jsonify({"success": False, "error": "Técnico (usuário) não encontrado."}), 400
     try:
+        # so linhas que hoje sao da conta de quem esta logado
         cur.execute(
             "UPDATE tecnicos_autorizados SET dispositivo=%s, usuario=%s, descricao=%s, "
-            "ativo=%s, alterado=NOW() WHERE dispositivo=%s",
-            (dispositivo, usuario, descricao, ativo, _normalizar_id(dispositivo_original))
+            "ativo=%s, alterado=NOW() WHERE dispositivo=%s "
+            "AND usuario IN (SELECT usuario FROM usuarios WHERE usuario = %s OR master = %s)",
+            (dispositivo, usuario, descricao, ativo, _normalizar_id(dispositivo_original),
+             request.usuario_id, request.usuario_id)
         )
         conn.commit()
         updated = cur.rowcount
@@ -1576,7 +2006,8 @@ def verificar_tecnico():
     cur = conn.cursor()
     cur.execute(
         "SELECT 1 FROM tecnicos_autorizados t JOIN usuarios u ON u.usuario = t.usuario "
-        "WHERE t.dispositivo = %s AND t.ativo = 'S' AND u.ativo = 'S'",
+        "LEFT JOIN usuarios m ON m.usuario = u.master "
+        "WHERE t.dispositivo = %s AND t.ativo = 'S' AND u.ativo = 'S' AND COALESCE(m.ativo, 'S') = 'S'",
         (peer,)
     )
     autorizado = cur.fetchone() is not None
@@ -1613,7 +2044,8 @@ def lista_tecnicos_cache():
     cur = conn.cursor()
     cur.execute(
         "SELECT t.dispositivo FROM tecnicos_autorizados t JOIN usuarios u ON u.usuario = t.usuario "
-        "WHERE t.ativo = 'S' AND u.ativo = 'S'"
+        "LEFT JOIN usuarios m ON m.usuario = u.master "
+        "WHERE t.ativo = 'S' AND u.ativo = 'S' AND COALESCE(m.ativo, 'S') = 'S'"
     )
     ids = [r[0] for r in cur.fetchall()]
     cur.close()
@@ -1630,10 +2062,12 @@ def lista_tecnicos_cache():
 # RustDesk no modo simples ("legacy"): /api/login, /api/currentUser,
 # /api/logout e GET /api/ab. /api/ab/personal NAO existe (404) - e assim que o
 # MrDeskPro sabe que deve usar o modo simples.
-# - Login com usuario/senha do painel, usuario ativo, e SO a partir de um
+# - Login com e-mail/senha (item 41; o campo "usuario" do MrDeskPro recebe o
+#   e-mail), usuario ativo, admin da empresa dele ativo, e SO a partir de um
 #   MrDeskPro cadastrado em Tecnicos autorizados pra esse mesmo usuario.
-# - Sessao vale 30 dias (depois, entrar de novo). Usuario ou MrDeskPro
-#   desativado -> a sessao cai na proxima conferencia.
+# - Sessao vale 30 dias (depois, entrar de novo). Usuario, admin da empresa
+#   ou MrDeskPro desativado, ou senha trocada -> a sessao cai na proxima
+#   conferencia.
 # - Catalogo: devices ativo = S, instalado = S e servidor = S; somente leitura;
 #   sem senha/hash (o RustDesk permite guardar atalho de senha no catalogo).
 serializer_pro = URLSafeTimedSerializer(config.APP_SECRET_KEY, salt="mrdeskpro-catalogo")
@@ -1654,13 +2088,19 @@ def _excedeu_limite_login_pro(ip):
         return len(janela) > LIMITE_LOGIN_PRO_POR_MINUTO
 
 
-def _usuario_pro_valido(cur, usuario_id, dispositivo):
-    # usuario ativo + esse MrDeskPro ativo e dele. Devolve (nome, admin, email) ou None.
+def _usuario_pro_valido(cur, usuario_id, dispositivo, emitido=None):
+    # usuario ativo + admin da empresa dele ativo + esse MrDeskPro ativo e dele
+    # + (se "emitido" vier) senha nao trocada depois da sessao criada.
+    # Devolve (nome, admin, email) ou None.
     cur.execute(
         "SELECT u.nome, u.admin, u.email FROM usuarios u "
         "JOIN tecnicos_autorizados t ON t.usuario = u.usuario "
-        "WHERE u.usuario = %s AND u.ativo = 'S' AND t.dispositivo = %s AND t.ativo = 'S'",
-        (usuario_id, dispositivo)
+        "LEFT JOIN usuarios m ON m.usuario = u.master "
+        "WHERE u.usuario = %s AND u.ativo = 'S' AND COALESCE(m.ativo, 'S') = 'S' "
+        "AND t.dispositivo = %s AND t.ativo = 'S' "
+        "AND (%s::bigint IS NULL OR u.senha_alterada IS NULL "
+        "     OR u.senha_alterada <= to_timestamp(%s::bigint)::timestamp)",
+        (usuario_id, dispositivo, emitido, emitido)
     )
     return cur.fetchone()
 
@@ -1676,12 +2116,12 @@ def _sessao_pro():
     if not token:
         return None
     try:
-        dados = serializer_pro.loads(token, max_age=VALIDADE_SESSAO_PRO)
+        dados, emitido = serializer_pro.loads(token, max_age=VALIDADE_SESSAO_PRO, return_timestamp=True)
     except (SignatureExpired, BadSignature):
         return None
     conn = get_db()
     cur = conn.cursor()
-    linha = _usuario_pro_valido(cur, dados.get("u"), dados.get("d"))
+    linha = _usuario_pro_valido(cur, dados.get("u"), dados.get("d"), int(emitido.timestamp()))
     cur.close()
     conn.close()
     if not linha:
@@ -1702,27 +2142,34 @@ def login_pro():
         return jsonify({"error": "Muitas tentativas. Aguarde um minuto e tente de novo."}), 429
 
     data = request.get_json(force=True, silent=True) or {}
-    nome = (data.get("username") or "").strip()
+    nome = _normalizar_email(data.get("username"))  # o login e o e-mail
     senha = data.get("password") or ""
     dispositivo = _normalizar_id(data.get("id"))
     if not nome or not senha or not dispositivo:
-        return jsonify({"error": "Informe usuário e senha."}), 400
+        return jsonify({"error": "Informe e-mail e senha."}), 400
+    if _login_bloqueado(nome):
+        return jsonify({"error": "Muitas tentativas. Aguarde alguns minutos e tente de novo."}), 429
 
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT usuario, nome, senha, admin, email FROM usuarios WHERE nome = %s AND ativo = 'S'", (nome,))
+    cur.execute("SELECT usuario, nome, senha, admin, email FROM usuarios WHERE email = %s AND ativo = 'S'", (nome,))
     user = cur.fetchone()
-    ok_senha = bool(user) and bcrypt.checkpw(senha.encode(), user["senha"].encode())
+    ok_senha = bool(user) and _senha_confere(senha, user["senha"])
     autorizado = None
     if ok_senha:
         cur2 = conn.cursor()
         autorizado = _usuario_pro_valido(cur2, user["usuario"], dispositivo)
+        if autorizado:
+            cur2.execute("UPDATE usuarios SET ultimo_login = NOW() WHERE usuario = %s", (user["usuario"],))
+            conn.commit()
         cur2.close()
     cur.close()
     conn.close()
 
     if not ok_senha:
-        return jsonify({"error": "Usuário ou senha inválidos."}), 401
+        _registrar_falha_login(nome)
+        return jsonify({"error": "E-mail ou senha inválidos. O login é o seu e-mail."}), 401
+    _limpar_falhas_login(nome)
     if not autorizado:
         print(f"login MrDeskPro recusado: usuario {nome} a partir de {dispositivo} (nao autorizado)",
               file=sys.stderr, flush=True)

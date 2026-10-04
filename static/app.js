@@ -454,6 +454,9 @@ document.getElementById("form-login").addEventListener("submit", async (e) => {
 
 function sair() {
   localStorage.removeItem("mrdesk_token");
+  // a busca guardada pro F5 não passa pra quem entrar depois
+  try { sessionStorage.removeItem("mrdesk_grupo_busca"); } catch (e) { /* ignora */ }
+  document.getElementById("busca").value = "";
   localStorage.removeItem("mrdesk_nome");
   localStorage.removeItem("mrdesk_admin");
   localStorage.removeItem("mrdesk_super");
@@ -810,6 +813,11 @@ function rotuloDispositivo(d) {
   return d.cliente ? `"${d.cliente}" (${d.apelido})` : `"${d.apelido}"`;
 }
 
+// Tira os acentos (e o cedilha) pra comparar textos na busca.
+function semAcento(texto) {
+  return String(texto || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 function renderizarTabela() {
   const termoBruto = document.getElementById("busca").value.toLowerCase();
   // Se o texto digitado for so numeros e espacos (ex: "207 575 694"
@@ -820,11 +828,13 @@ function renderizarTabela() {
   const apenasNumerosEEspacos = !grupo && /^[0-9\s]+$/.test(termoBruto.trim()) && termoBruto.trim() !== "";
   const termo = apenasNumerosEEspacos ? termoBruto.replace(/\s+/g, "") : termoBruto.trim();
 
+  // Cliente e apelido: a busca ignora acentos ("joao" acha "João")
+  const termoSemAcento = semAcento(termo);
   const filtrados = grupo
     ? dispositivos.filter(d => grupo.includes(d.id))
     : dispositivos.filter(d =>
-        (d.cliente || "").toLowerCase().includes(termo) ||
-        (d.apelido || "").toLowerCase().includes(termo) ||
+        semAcento((d.cliente || "").toLowerCase()).includes(termoSemAcento) ||
+        semAcento((d.apelido || "").toLowerCase()).includes(termoSemAcento) ||
         d.id.includes(termo) ||
         // coluna Versão MR1 (só a conta da Sysrs tem): compara com o texto como foi digitado
         (d.versao_erp || "").toLowerCase().includes(termoBruto.trim())
@@ -1003,26 +1013,31 @@ function idsDoGrupo(texto) {
   return texto.split(/[,;]/).map(t => t.replace(/\D/g, "")).filter(t => t);
 }
 
+// Guarda o texto da busca até fechar a aba, pra sobreviver ao F5: tanto o
+// grupo (Ctrl+clique) quanto uma busca comum (04/10/2026).
 function guardarGrupoDaBusca() {
   const texto = document.getElementById("busca").value;
   try {
-    if (idsDoGrupo(texto) && catalogoAtual) {
-      sessionStorage.setItem(CHAVE_GRUPO, JSON.stringify({ catalogo: String(catalogoAtual.catalogo), texto }));
+    if (texto.trim() && catalogoAtual) {
+      sessionStorage.setItem(CHAVE_GRUPO, JSON.stringify({
+        catalogo: String(catalogoAtual.catalogo), texto, grupo: !!idsDoGrupo(texto)
+      }));
     } else {
       sessionStorage.removeItem(CHAVE_GRUPO);
     }
-  } catch (e) { /* sem armazenamento: o grupo só não sobrevive ao F5 */ }
+  } catch (e) { /* sem armazenamento: a busca só não sobrevive ao F5 */ }
 }
 
-// Depois do F5: devolve o grupo à busca, se o catálogo aberto é o mesmo.
+// Depois do F5: devolve o texto à busca. O grupo só volta se o catálogo aberto
+// é o mesmo em que foi montado; a busca comum volta em qualquer catálogo.
 function restaurarGrupoDaBusca() {
   try {
     const salvo = JSON.parse(sessionStorage.getItem(CHAVE_GRUPO) || "null");
-    if (salvo && catalogoAtual && salvo.catalogo === String(catalogoAtual.catalogo)
-        && !document.getElementById("busca").value) {
-      document.getElementById("busca").value = salvo.texto;
-      atualizarVisibilidadeBotaoLimpar();
-    }
+    if (!salvo || !catalogoAtual || document.getElementById("busca").value) return;
+    const ehGrupo = salvo.grupo !== undefined ? salvo.grupo : !!idsDoGrupo(salvo.texto);
+    if (ehGrupo && salvo.catalogo !== String(catalogoAtual.catalogo)) return;
+    document.getElementById("busca").value = salvo.texto;
+    atualizarVisibilidadeBotaoLimpar();
   } catch (e) { /* ignora */ }
 }
 

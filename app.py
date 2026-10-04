@@ -1247,9 +1247,9 @@ def get_connect_link(device_id):
         return jsonify({"success": True, "link": link})
 
     # ID que ainda nao e da conta: permite conectar mesmo assim (botao "Acessar"
-    # da busca), desde que tenha o formato de um ID do MrDesk (9 ou 10
+    # da busca), desde que tenha o formato de um ID do MrDesk (7 a 10
     # digitos). Se o acesso der certo, o dispositivo entra na conta sozinho.
-    if device_id.isdigit() and 9 <= len(device_id) <= 10:
+    if device_id.isdigit() and 7 <= len(device_id) <= 10:
         return jsonify({"success": True, "link": f"{ESQUEMA_CONEXAO}://{modo}/{device_id}"})
 
     return jsonify({"success": False, "error": "Dispositivo nao encontrado"}), 404

@@ -877,7 +877,7 @@ function renderizarTabela() {
 }
 
 // ---- Botão "Acessar" da busca ----
-// Quando o texto da busca é um ID completo (9 ou 10 dígitos) e esse ID não
+// Quando o texto da busca é um ID completo (7 a 10 dígitos) e esse ID não
 // aparece na lista (catálogo ou filtros escondendo, ou ID não cadastrado),
 // mostra o botão "Acessar" ao lado da busca. O hint explica o que esconde o
 // dispositivo, comparando com o catálogo e os filtros marcados agora.
@@ -888,7 +888,7 @@ let localizado = null;
 
 function atualizarBotaoAcessar(idDigitado, filtrados) {
   const btn = document.getElementById("btn-acessar-id");
-  const idCompleto = /^\d{9,10}$/.test(idDigitado);
+  const idCompleto = /^\d{7,10}$/.test(idDigitado);
   const visivelNaLista = idCompleto && filtrados.some(d => d.id === idDigitado);
 
   if (!idCompleto || visivelNaLista) {

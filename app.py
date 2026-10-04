@@ -124,6 +124,34 @@ def _ips_piloto():
     return {str(ip).strip() for ip in ips if str(ip).strip()}
 
 
+# Versao do MrDesk de cada maquina (04/10/2026): o client ja informa a propria
+# versao - "ver" (numero) em todo heartbeat e "version" (texto) no sysinfo.
+# Guardamos em devices.versao pra o painel marcar quem esta desatualizado.
+def _versao_do_numero(n):
+    # Inverso do get_version_number do RustDesk: 1.4.11 -> 1004110 (o ultimo
+    # numero vai multiplicado por 10).
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    return "%d.%d.%d" % (n // 1000000, (n // 1000) % 1000, (n % 1000) // 10)
+
+
+def _versao_do_texto(v):
+    v = (str(v).strip() if v is not None else "")
+    return v if re.fullmatch(r"\d+(\.\d+){1,3}", v) else None
+
+
+def _versao_menor(a, b):
+    # True se a versao "a" e anterior a "b" (compara numero a numero).
+    try:
+        return [int(x) for x in a.split(".")] < [int(x) for x in b.split(".")]
+    except (AttributeError, ValueError):
+        return False
+
+
 @app.route("/api/version/latest", methods=["POST"])
 def version_latest():
     # Corpo enviado pelo client (os, os_version, arch, device_id, typ) -
@@ -1210,7 +1238,7 @@ def list_devices():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
         "SELECT d.id, dc.cliente, dc.apelido, dc.observacao, dc.usuario, dc.ativo, dc.servidor, dc.catalogo, "
-        "d.sistema, d.memoria, d.processador, d.computador, "
+        "d.sistema, d.memoria, d.processador, d.computador, d.versao, "
         "d.ultima_vez_online, dc.inclusao, dc.atualizado, "
         # item 30: versao do ERP (licencas.id_mrdesk = devices.id) - so a conta da Sysrs
         "CASE WHEN %s THEN l.versao END AS versao_erp, "
@@ -1236,6 +1264,10 @@ def list_devices():
     # cada ~15-18s, entao 40s da uma folga sem falso "offline").
     LIMITE_ONLINE_SEGUNDOS = 40
 
+    # Versao publicada (a dos exes em updates). Maquina com versao anterior a
+    # ela - ou sem versao conhecida - aparece marcada como desatualizada.
+    versao_publicada = get_current_update_version() or None
+
     devices = []
     for row in rows:
         ultima = row["ultima_vez_online"]
@@ -1248,6 +1280,11 @@ def list_devices():
             "apelido": row["apelido"],
             "observacao": row["observacao"],
             "sistema": row["sistema"],
+            "versao": row["versao"],
+            # sem versao conhecida (maquina que nao deu sinal desde que a coluna
+            # existe) conta como desatualizada
+            "desatualizado": bool(versao_publicada and (not row["versao"]
+                                  or _versao_menor(row["versao"], versao_publicada))),
             "versao_erp": row["versao_erp"],
             "memoria": row["memoria"],
             "processador": row["processador"],
@@ -1263,7 +1300,7 @@ def list_devices():
             "atualizado": row["atualizado"].isoformat() if row["atualizado"] else None
         })
 
-    return jsonify({"success": True, "devices": devices})
+    return jsonify({"success": True, "devices": devices, "versao_publicada": versao_publicada})
 
 
 # ------------------------------------------------------------
@@ -1909,6 +1946,7 @@ def heartbeat():
     except (TypeError, ValueError):
         ocioso = None
 
+    versao = _versao_do_numero(data.get("ver"))
     uuid_env = _uuid_recebido(data)
     conn = get_db()
     cur = conn.cursor()
@@ -1939,12 +1977,13 @@ def heartbeat():
                 (str(device_id)[:20], ACESSO_FATOR, ativos)
             )
         if ocioso is None:
-            cur.execute("UPDATE devices SET ultima_vez_online = NOW() WHERE id = %s", (device_id,))
+            cur.execute("UPDATE devices SET ultima_vez_online = NOW(), versao = COALESCE(%s, versao) "
+                        "WHERE id = %s", (versao, device_id))
         else:
             cur.execute(
-                "UPDATE devices SET ultima_vez_online = NOW(), "
+                "UPDATE devices SET ultima_vez_online = NOW(), versao = COALESCE(%s, versao), "
                 "ultima_atividade = NOW() - make_interval(secs => %s) WHERE id = %s",
-                (ocioso, device_id)
+                (versao, ocioso, device_id)
             )
     else:
         # Dispositivo desconhecido: cria um registro minimo.
@@ -1952,9 +1991,9 @@ def heartbeat():
         # os dados (hostname, SO, etc).
         # (item 41: fica "sem conta" ate o primeiro acesso de um tecnico)
         cur.execute(
-            "INSERT INTO devices (id, ultima_vez_online, uuid) "
-            "VALUES (%s, NOW(), %s) ON CONFLICT (id) DO NOTHING",
-            (device_id, uuid_env)
+            "INSERT INTO devices (id, ultima_vez_online, uuid, versao) "
+            "VALUES (%s, NOW(), %s, %s) ON CONFLICT (id) DO NOTHING",
+            (device_id, uuid_env, versao)
         )
     conn.commit()
     cur.close()
@@ -1980,6 +2019,7 @@ def sysinfo():
     memoria = _txt(data.get("memory"), 20)
     processador = _txt(data.get("cpu"), 150)
     computador = _txt(data.get("hostname"), 100)
+    versao = _versao_do_texto(data.get("version"))
 
     # Campo novo do client (patch aplicado em 26/09/2026): informa se o
     # RustDesk esta rodando instalado ("S") ou portatil/nao instalado ("N").
@@ -2010,17 +2050,17 @@ def sysinfo():
         cur.execute(
             "UPDATE devices SET sistema = COALESCE(%s, sistema), memoria = COALESCE(%s, memoria), "
             "processador = COALESCE(%s, processador), computador = COALESCE(%s, computador), "
-            "ultima_vez_online = NOW(), "
+            "ultima_vez_online = NOW(), versao = COALESCE(%s, versao), "
             "instalado = CASE WHEN %s IS NOT NULL THEN %s ELSE instalado END "
             "WHERE id = %s",
-            (sistema, memoria, processador, computador, instalado, instalado, device_id)
+            (sistema, memoria, processador, computador, versao, instalado, instalado, device_id)
         )
     else:
         cur.execute(
             "INSERT INTO devices (id, ultima_vez_online, instalado, "
-            "sistema, memoria, processador, computador, uuid) "
-            "VALUES (%s, NOW(), COALESCE(%s, 'S'), %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
-            (device_id, instalado, sistema, memoria, processador, computador, uuid_env)
+            "sistema, memoria, processador, computador, uuid, versao) "
+            "VALUES (%s, NOW(), COALESCE(%s, 'S'), %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+            (device_id, instalado, sistema, memoria, processador, computador, uuid_env, versao)
         )
 
     conn.commit()

@@ -144,9 +144,31 @@ function sistemaCurto(sistema) {
   if (traco > 0) s = s.slice(0, traco);
   return s.trim() || sistema;
 }
+// MrDesk desatualizado (04/10): o servidor manda a versão de cada máquina e
+// a versão publicada; máquina com versão anterior ganha um ícone antes do
+// sistema, com a versão instalada na dica. O nome da coluna mostra quantas são.
+let versaoPublicada = null;
+const ICONE_DESATUALIZADO = '<svg class="icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12a9 9 0 0 1 15.5-6.2"/><path d="M18.5 2v4h-4"/><path d="M5.5 22v-4h4"/></svg>';
+function iconeDesatualizado(d) {
+  if (!d.desatualizado) return "";
+  // sem versão = máquina que não deu sinal desde que o painel passou a guardar a versão
+  const dica = (d.versao ? `MrDesk desatualizado: versão ${d.versao} instalada` : "MrDesk desatualizado: versão não informada, a máquina ainda não deu sinal")
+    + (versaoPublicada ? ` (atual: ${versaoPublicada})` : "");
+  return `<span title="${escapeHtml(dica)}">${ICONE_DESATUALIZADO}</span>`;
+}
+function atualizarDicaDeDesatualizados() {
+  const th = document.getElementById("th-desatualizado");
+  const n = dispositivos.filter(d => d.desatualizado).length;
+  th.classList.toggle("tem-desatualizado", n > 0);
+  th.title = (n === 0 ? "Nenhum dispositivo com MrDesk desatualizado"
+    : n === 1 ? "1 dispositivo com MrDesk desatualizado" : `${n} dispositivos com MrDesk desatualizado`)
+    + (versaoPublicada ? ` (versão atual: ${versaoPublicada})` : "");
+}
+
 function hintSistema(d) {
   const linhas = [];
   if (d.sistema) linhas.push(`Sistema: ${d.sistema}`);
+  if (d.versao) linhas.push(`MrDesk: ${d.versao}`);
   if (d.memoria) linhas.push(`Memória: ${d.memoria}`);
   if (d.processador) linhas.push(`Processador: ${d.processador}`);
   if (d.computador) linhas.push(`Computador: ${d.computador}`);
@@ -795,6 +817,8 @@ async function carregarDispositivos(silencioso = false) {
     if (resp.status === 401) { mostrarLogin(); return; }
     const data = await resp.json();
     dispositivos = data.devices || [];
+    versaoPublicada = data.versao_publicada || null;
+    atualizarDicaDeDesatualizados();
     restaurarGrupoDaBusca();
     renderizarTabela();
     if (silencioso && caixa) caixa.scrollTop = rolagem;
@@ -917,6 +941,7 @@ function renderizarTabela() {
         ${formatarDataHora(d.ultima_vez_online)}
         ${tempoDecorrido ? `<div style="font-size:11px;font-style:italic;color:${d.online ? "var(--verde)" : "var(--vermelho)"};">${tempoDecorrido}</div>` : ""}
       </td>
+      <td class="col-desatualizado" style="${opacidadeConteudo}">${iconeDesatualizado(d)}</td>
       <td class="col-sistema" style="${opacidadeConteudo}" title="${escapeHtml(hintSistema(d))}">${escapeHtml(sistemaCurto(d.sistema))}</td>
       <td class="col-versao${versaoAbaixoDaMinima(d.versao_erp) ? " versao-antiga" : ""}" style="${opacidadeConteudo}"><span${versaoAbaixoDaMinima(d.versao_erp) ? ` title="Abaixo da versão mínima (${escapeHtml(lerVersaoMinima())})"` : ""}>${escapeHtml(d.versao_erp || "")}</span></td>
       <td class="acoes-linha col-acoes-estreita">

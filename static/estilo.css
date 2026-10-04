@@ -181,6 +181,12 @@
   .acoes-linha { text-align: right; white-space: nowrap; position: relative; }
   .col-acoes-estreita { width: 1%; } /* so o espaco dos botoes */
   td.col-sistema { color: var(--texto-secundario); font-size: 13px; cursor: help; }
+  /* MrDesk desatualizado: coluna estreita so com o icone (o titulo da coluna e o proprio icone) */
+  th.col-desatualizado, td.col-desatualizado { width: 30px; padding-left: 4px; padding-right: 4px; text-align: center; }
+  th.col-desatualizado { cursor: help; color: var(--texto-secundario); }
+  th.col-desatualizado.tem-desatualizado, td.col-desatualizado { color: #d97706; }
+  .col-desatualizado .icon { width: 16px; height: 16px; }
+  td.col-desatualizado span { cursor: help; }
   /* Versão do ERP (item 30): amarela quando menor que a mínima configurada */
   td.col-versao { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   td.col-versao.versao-antiga span { background: #fde68a; color: #713f12; border-radius: 6px; padding: 2px 7px; font-weight: 600; cursor: help; }

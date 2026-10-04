@@ -29,3 +29,10 @@ SMTP_SEGURANCA = "starttls"      # "starttls" (porta 587) ou "ssl" (porta 465)
 SMTP_USUARIO = "..."             # conta que envia
 SMTP_SENHA = "..."
 SMTP_REMETENTE = "MrDesk <naoresponda@sysrs.com.br>"
+
+
+# Publicacao piloto da atualizacao automatica: enquanto houver IP aqui, so as
+# maquinas que perguntam a partir desses IPs de internet recebem a versao nova
+# que esta em /opt/mrdesk-suporte/updates; as outras continuam como estao.
+# Lista vazia = todo mundo atualiza. Mudou aqui -> reiniciar o servico.
+ATUALIZACAO_PILOTO_IPS = []

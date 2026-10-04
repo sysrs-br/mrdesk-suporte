@@ -112,6 +112,18 @@ def get_current_update_version():
     return versoes[0]
 
 
+# Publicacao piloto por IP (04/10/2026): ATUALIZACAO_PILOTO_IPS no config.py.
+# O client so manda uma impressao do hardware na consulta (nao o ID), entao o
+# piloto e escolhido pelo IP de internet de onde a consulta chega. Todas as
+# maquinas atras daquele IP atualizam. Lista vazia (ou ausente) = todo mundo.
+# Mudou o config.py -> reiniciar o servico.
+def _ips_piloto():
+    ips = getattr(config, "ATUALIZACAO_PILOTO_IPS", None) or []
+    if isinstance(ips, str):
+        ips = [ips]
+    return {str(ip).strip() for ip in ips if str(ip).strip()}
+
+
 @app.route("/api/version/latest", methods=["POST"])
 def version_latest():
     # Corpo enviado pelo client (os, os_version, arch, device_id, typ) -
@@ -121,6 +133,12 @@ def version_latest():
     version = get_current_update_version()
     if not version:
         # Responde um formato valido, mas que nunca aciona atualizacao.
+        return jsonify({"url": ""})
+
+    # Publicacao piloto: enquanto houver IP na lista, so quem pergunta a partir
+    # deles fica sabendo da versao nova; os outros recebem "sem atualizacao".
+    piloto = _ips_piloto()
+    if piloto and _ip() not in piloto:
         return jsonify({"url": ""})
 
     return jsonify({"url": f"{UPDATE_CHECK_HOST}/tag/{version}"})
@@ -133,6 +151,8 @@ def version_status():
     return jsonify({
         "exes": {nome: (_versao_do_exe(nome) or None) for nome in UPDATE_EXES},
         "anunciada": get_current_update_version() or None,
+        # True = so os IPs do piloto recebem a versao anunciada
+        "piloto": bool(_ips_piloto()),
     })
 
 

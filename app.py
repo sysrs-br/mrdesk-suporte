@@ -146,6 +146,12 @@ def version_status():
 #   - a senha e trocada (usuarios.senha_alterada posterior a criacao do token).
 # So admin entra no painel (superadmin e admin de empresa); tecnico usa o
 # MrDeskPro.
+# Conta da Sysrs (usuario admin da empresa Sysrs): so ela e o superadmin veem
+# os graficos do servidor; so ela tem Licenca MR1, Versao MR1 e "Liberar nova
+# maquina".
+CONTA_SYSRS = getattr(config, "CONTA_SYSRS", 2)
+
+
 def gerar_token(usuario_id):
     return serializer.dumps({"u": usuario_id})
 
@@ -200,6 +206,7 @@ def require_auth(f):
         request.usuario_email = user["email"]
         request.usuario_admin = True
         request.usuario_super = user["master"] is None
+        request.usuario_sysrs = user["usuario"] == CONTA_SYSRS
         return f(*args, **kwargs)
     return decorated
 
@@ -214,9 +221,36 @@ def require_admin(f):
     return decorated
 
 
+def require_super(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not getattr(request, "usuario_super", False):
+            return jsonify({"success": False, "error": "Acesso restrito ao superadministrador"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+def require_sysrs(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not getattr(request, "usuario_sysrs", False):
+            return jsonify({"success": False, "error": "Recurso nao disponivel para esta conta"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+def require_sysrs_ou_super(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not (getattr(request, "usuario_sysrs", False) or getattr(request, "usuario_super", False)):
+            return jsonify({"success": False, "error": "Recurso nao disponivel para esta conta"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
 def require_admin_empresa(f):
-    # So o admin de empresa (o superadmin nao): tecnicos autorizados e
-    # exclusao de dispositivos.
+    # So o admin de empresa (o superadmin nao tem conta): catalogos,
+    # dispositivos, auditoria e tecnicos autorizados.
     @wraps(f)
     def decorated(*args, **kwargs):
         if getattr(request, "usuario_super", True):
@@ -271,6 +305,7 @@ def _trafego_mes_atual():
 
 @app.route("/api/trafego", methods=["GET"])
 @require_auth
+@require_sysrs_ou_super
 def trafego():
     try:
         return jsonify({"success": True, **_trafego_mes_atual()})
@@ -286,6 +321,7 @@ def trafego():
 # Mesmo calculo do "df -h /": usado / (usado + disponivel).
 @app.route("/api/disco", methods=["GET"])
 @require_auth
+@require_sysrs_ou_super
 def disco():
     try:
         st = os.statvfs("/")
@@ -313,6 +349,7 @@ def disco():
 # nao conta como usado).
 @app.route("/api/memoria", methods=["GET"])
 @require_auth
+@require_sysrs_ou_super
 def memoria():
     try:
         valores = {}
@@ -604,6 +641,7 @@ def login():
         "name": user["nome"],
         "admin": True,
         "super": user["master"] is None,
+        "sysrs": user["usuario"] == CONTA_SYSRS,
         "token": gerar_token(user["usuario"])
     })
 
@@ -838,6 +876,10 @@ def add_usuario():
              d["empresa"], d["acesso"])
         )
         novo_id = cur.fetchone()[0]
+        if admin == "S":
+            # toda conta nasce com o catalogo "Novos", que recebe as maquinas
+            cur.execute("INSERT INTO catalogos (conta, catalogo, nome) VALUES (%s, %s, %s)",
+                        (novo_id, CATALOGO_NOVOS, NOME_CATALOGO_NOVOS))
         _log_usuario(cur, novo_id, "C", request.usuario_id, d["email"], _ip())
         conn.commit()
     except psycopg2.errors.UniqueViolation:
@@ -947,75 +989,102 @@ def reenviar_link_usuario(usuario_id):
 
 
 # ------------------------------------------------------------
-# CATALOGOS
+# CATALOGOS E DISPOSITIVOS POR CONTA (item 41, entrega 2)
 # ------------------------------------------------------------
+# Conta = usuario admin da empresa (request.usuario_id de quem esta no painel).
+# Cada conta tem os seus catalogos e a sua ficha de cada dispositivo
+# (devices_contas: cliente, apelido, observacao, catalogo, ativo, servidor).
+# Em devices ficam so os dados da maquina. O superadmin nao tem conta: nao
+# ve catalogos nem dispositivos (so a lista "sem conta").
+# A ligacao dispositivo x conta nasce sozinha no primeiro acesso remoto que
+# der certo de um tecnico da conta (rota de auditoria); aqui nao existe
+# inclusao manual - quem pudesse digitar um ID veria dados de maquina alheia.
 TAMANHO_NOME_CATALOGO = 10  # catalogos.nome e varchar(10)
+# Catalogo fixo de toda conta (criado junto com ela): recebe a maquina no
+# primeiro acesso de um tecnico. Nao pode ser renomeado.
+CATALOGO_NOVOS = 0
+NOME_CATALOGO_NOVOS = "Novos"
+
 
 @app.route("/api/catalogos", methods=["GET"])
 @require_auth
+@require_admin_empresa
 def list_catalogos():
     conn = get_db()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT catalogo, nome, senha_geral FROM catalogos ORDER BY catalogo")
-    rows = cur.fetchall()
+    cur = conn.cursor()
+    cur.execute("SELECT catalogo, nome FROM catalogos WHERE conta = %s ORDER BY catalogo", (request.usuario_id,))
+    catalogos = [{"catalogo": int(r[0]), "nome": r[1], "fixo": int(r[0]) == CATALOGO_NOVOS}
+                 for r in cur.fetchall()]
     cur.close()
     conn.close()
-    catalogos = []
-    for r in rows:
-        catalogos.append({
-            "catalogo": int(r["catalogo"]),
-            "nome": r["nome"],
-            "senha_geral": "S" if r["senha_geral"] == "S" else "N",
-        })
     return jsonify({"success": True, "catalogos": catalogos})
+
+
+def _nome_catalogo(data):
+    nome = (data.get("nome") or "").strip()
+    if not nome:
+        return None, "Nome obrigatorio"
+    if len(nome) > TAMANHO_NOME_CATALOGO:
+        return None, f"O nome do catálogo tem no máximo {TAMANHO_NOME_CATALOGO} caracteres"
+    return nome, None
 
 
 @app.route("/api/catalogos", methods=["POST"])
 @require_auth
+@require_admin_empresa
 def add_catalogo():
-    data = request.get_json()
-    nome = (data.get("nome") or "").strip()
-    if not nome:
-        return jsonify({"success": False, "error": "Nome obrigatorio"}), 400
-    if len(nome) > TAMANHO_NOME_CATALOGO:
-        return jsonify({"success": False, "error": f"O nome do catálogo tem no máximo {TAMANHO_NOME_CATALOGO} caracteres"}), 400
+    nome, erro = _nome_catalogo(request.get_json(force=True, silent=True) or {})
+    if erro:
+        return jsonify({"success": False, "error": erro}), 400
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT COALESCE(MAX(catalogo), 0) + 1 FROM catalogos")
-    novo_id = cur.fetchone()[0]
-    cur.execute("INSERT INTO catalogos (catalogo, nome) VALUES (%s, %s)", (novo_id, nome))
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        # numeracao propria de cada conta
+        cur.execute(
+            "INSERT INTO catalogos (conta, catalogo, nome) "
+            "SELECT %s, COALESCE(MAX(catalogo), 0) + 1, %s FROM catalogos WHERE conta = %s "
+            "RETURNING catalogo",
+            (request.usuario_id, nome, request.usuario_id)
+        )
+        novo_id = cur.fetchone()[0]
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        return jsonify({"success": False, "error": "Já existe um catálogo com esse nome."}), 409
+    finally:
+        cur.close()
+        conn.close()
     return jsonify({"success": True, "catalogo": novo_id, "nome": nome})
 
 
-# EDITAR catalogo - so o admin. "senha_geral" = 'S' libera, nos dispositivos
-# desse catalogo, a senha geral do tecnico (item 6B, ainda nao implementado:
-# por enquanto o campo so fica gravado). Qualquer valor diferente de 'S' = nao.
 @app.route("/api/catalogos/<int:catalogo_id>", methods=["PUT"])
 @require_auth
-@require_admin
+@require_admin_empresa
 def edit_catalogo(catalogo_id):
-    data = request.get_json() or {}
-    nome = (data.get("nome") or "").strip()
-    senha_geral = "S" if data.get("senha_geral") == "S" else "N"
-    if not nome:
-        return jsonify({"success": False, "error": "Nome obrigatorio"}), 400
-    if len(nome) > TAMANHO_NOME_CATALOGO:
-        return jsonify({"success": False, "error": f"O nome do catálogo tem no máximo {TAMANHO_NOME_CATALOGO} caracteres"}), 400
+    if catalogo_id == CATALOGO_NOVOS:
+        return jsonify({"success": False,
+                        "error": f"O catálogo \"{NOME_CATALOGO_NOVOS}\" não pode ser renomeado."}), 400
+    nome, erro = _nome_catalogo(request.get_json(force=True, silent=True) or {})
+    if erro:
+        return jsonify({"success": False, "error": erro}), 400
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(
-        "UPDATE catalogos SET nome=%s, senha_geral=%s WHERE catalogo=%s",
-        (nome, senha_geral, catalogo_id)
-    )
-    conn.commit()
-    updated = cur.rowcount
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("UPDATE catalogos SET nome = %s WHERE conta = %s AND catalogo = %s",
+                    (nome, request.usuario_id, catalogo_id))
+        updated = cur.rowcount
+        # o nome do catalogo aparece como etiqueta no MrDeskPro: as fichas mudaram
+        cur.execute("UPDATE devices_contas SET atualizado = NOW() WHERE conta = %s AND catalogo = %s",
+                    (request.usuario_id, catalogo_id))
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        return jsonify({"success": False, "error": "Já existe um catálogo com esse nome."}), 409
+    finally:
+        cur.close()
+        conn.close()
 
     if updated == 0:
         return jsonify({"success": False, "error": "Catalogo nao encontrado"}), 404
@@ -1023,10 +1092,11 @@ def edit_catalogo(catalogo_id):
 
 
 # ------------------------------------------------------------
-# LISTAR dispositivos
+# LISTAR dispositivos da conta
 # ------------------------------------------------------------
 @app.route("/api/devices", methods=["GET"])
 @require_auth
+@require_admin_empresa
 def list_devices():
     catalogo = request.args.get("catalogo")
     filtro_ativo = request.args.get("ativo", "S")
@@ -1040,29 +1110,32 @@ def list_devices():
     if filtro_instalado not in ("S", "N"):
         filtro_instalado = "S"
 
-    if not catalogo:
+    try:
+        catalogo = int(catalogo)
+    except (TypeError, ValueError):
         return jsonify({"success": False, "error": "catalogo e obrigatorio"}), 400
-
-    condicoes = ["d.catalogo = %s", "d.ativo = %s", "d.servidor = %s", "d.instalado = %s"]
-    parametros = [catalogo, filtro_ativo, filtro_servidor, filtro_instalado]
-
-    where_sql = " AND ".join(condicoes)
 
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        f"SELECT d.id, d.cliente, d.apelido, d.observacao, d.usuario, d.ativo, d.servidor, d.catalogo, "
-        f"d.sistema, d.memoria, d.processador, d.computador, "
-        f"d.ultima_vez_online, d.inclusao, d.atualizado, "
-        # item 30: versao do ERP (licencas.id_mrdesk = devices.id, no maximo 1 por device)
-        f"l.versao AS versao_erp, "
+        "SELECT d.id, dc.cliente, dc.apelido, dc.observacao, dc.usuario, dc.ativo, dc.servidor, dc.catalogo, "
+        "d.sistema, d.memoria, d.processador, d.computador, "
+        "d.ultima_vez_online, dc.inclusao, dc.atualizado, "
+        # item 30: versao do ERP (licencas.id_mrdesk = devices.id) - so a conta da Sysrs
+        "CASE WHEN %s THEN l.versao END AS versao_erp, "
         # tempo sem sinal calculado DENTRO do banco (mesmo relogio que gravou
         # ultima_vez_online) - nao depende do relogio/fuso do Python
-        f"EXTRACT(EPOCH FROM (NOW() - d.ultima_vez_online)) AS segundos_sem_sinal, "
-        f"EXTRACT(EPOCH FROM (NOW() - d.ultima_atividade)) AS segundos_sem_uso "
-        f"FROM devices d LEFT JOIN licencas l ON l.id_mrdesk = d.id "
-        f"WHERE {where_sql} ORDER BY d.cliente, d.apelido",
-        parametros
+        "EXTRACT(EPOCH FROM (NOW() - d.ultima_vez_online)) AS segundos_sem_sinal, "
+        "EXTRACT(EPOCH FROM (NOW() - d.ultima_atividade)) AS segundos_sem_uso "
+        "FROM devices_contas dc JOIN devices d ON d.id = dc.dispositivo "
+        "LEFT JOIN licencas l ON l.id_mrdesk = d.id "
+        # No catalogo "Novos" os filtros nao valem: e a caixa de entrada, mostra tudo o que chegou.
+        "WHERE dc.conta = %s AND dc.catalogo = %s "
+        "AND (%s OR (dc.ativo = %s AND dc.servidor = %s AND d.instalado = %s)) "
+        # cliente nulo: a ficha aparece pelo apelido
+        "ORDER BY COALESCE(dc.cliente, dc.apelido), dc.apelido",
+        (request.usuario_sysrs, request.usuario_id, catalogo, catalogo == CATALOGO_NOVOS,
+         filtro_ativo, filtro_servidor, filtro_instalado)
     )
     rows = cur.fetchall()
     cur.close()
@@ -1078,7 +1151,6 @@ def list_devices():
         online = None
         if row["segundos_sem_sinal"] is not None:
             online = float(row["segundos_sem_sinal"]) <= LIMITE_ONLINE_SEGUNDOS
-
         devices.append({
             "id": row["id"],
             "cliente": row["cliente"],
@@ -1104,6 +1176,41 @@ def list_devices():
 
 
 # ------------------------------------------------------------
+# DISPOSITIVOS SEM CONTA - so o superadmin
+# ------------------------------------------------------------
+# Maquinas com o MrDesk instalado que nenhum tecnico acessou ainda (sem linha
+# em devices_contas). Os MrDeskPro cadastrados em Tecnicos autorizados ficam
+# de fora: sao computadores de tecnicos, nao de clientes.
+@app.route("/api/devices/sem-conta", methods=["GET"])
+@require_auth
+@require_super
+def devices_sem_conta():
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "SELECT d.id, d.computador, d.sistema, d.instalado, d.inclusao, d.ultima_vez_online, "
+        "EXTRACT(EPOCH FROM (NOW() - d.ultima_vez_online)) AS segundos_sem_sinal "
+        "FROM devices d "
+        "WHERE NOT EXISTS (SELECT 1 FROM devices_contas dc WHERE dc.dispositivo = d.id) "
+        "AND NOT EXISTS (SELECT 1 FROM tecnicos_autorizados t WHERE t.dispositivo = d.id) "
+        "ORDER BY d.ultima_vez_online DESC NULLS LAST, d.id"
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    devices = [{
+        "id": r["id"],
+        "computador": r["computador"],
+        "sistema": r["sistema"],
+        "instalado": r["instalado"],
+        "online": float(r["segundos_sem_sinal"]) <= 40 if r["segundos_sem_sinal"] is not None else None,
+        "inclusao": r["inclusao"].isoformat() if r["inclusao"] else None,
+        "ultima_vez_online": r["ultima_vez_online"].isoformat() if r["ultima_vez_online"] else None,
+    } for r in rows]
+    return jsonify({"success": True, "devices": devices})
+
+
+# ------------------------------------------------------------
 # PEGAR link de conexao
 # ------------------------------------------------------------
 # Os links de conexao abrem o app do TECNICO (MrDeskPro). O RustDesk registra
@@ -1115,6 +1222,7 @@ ESQUEMA_CONEXAO = "mrdeskpro"
 
 @app.route("/api/devices/<device_id>/connect", methods=["GET"])
 @require_auth
+@require_admin_empresa
 def get_connect_link(device_id):
     modo = request.args.get("mode", "connect")
     modos_validos = ["connect", "file-transfer", "view-camera", "terminal", "port-forward"]
@@ -1122,24 +1230,25 @@ def get_connect_link(device_id):
         modo = "connect"
 
     conn = get_db()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT id, cliente FROM devices WHERE id = %s", (device_id,))
+    cur = conn.cursor()
+    cur.execute("SELECT COALESCE(cliente, apelido) FROM devices_contas WHERE dispositivo = %s AND conta = %s",
+                (device_id, request.usuario_id))
     row = cur.fetchone()
     cur.close()
     conn.close()
 
     if row:
-        link = f"{ESQUEMA_CONEXAO}://{modo}/{row['id']}"
+        link = f"{ESQUEMA_CONEXAO}://{modo}/{device_id}"
         # Item 27: o MrDeskPro (patch 12) usa o nome do cliente como nome da aba
-        cliente = (row["cliente"] or "").strip()
+        cliente = (row[0] or "").strip()
         if cliente:
             from urllib.parse import quote
             link += "?cliente=" + quote(cliente, safe="")
         return jsonify({"success": True, "link": link})
 
-    # ID ainda nao cadastrado: permite conectar mesmo assim (botao "Acessar"
+    # ID que ainda nao e da conta: permite conectar mesmo assim (botao "Acessar"
     # da busca), desde que tenha o formato de um ID do MrDesk (9 ou 10
-    # digitos). Na primeira conexao o proprio client se cadastra pelo heartbeat.
+    # digitos). Se o acesso der certo, o dispositivo entra na conta sozinho.
     if device_id.isdigit() and 9 <= len(device_id) <= 10:
         return jsonify({"success": True, "link": f"{ESQUEMA_CONEXAO}://{modo}/{device_id}"})
 
@@ -1152,8 +1261,10 @@ def get_connect_link(device_id):
 # A tabela relay_sessoes e preenchida pelo coletar_relay.py (timer do
 # systemd, a cada 5 min). Aqui so contamos: sessoes que passaram pelo relay
 # x total de conexoes registradas na auditoria no mesmo periodo.
+# Grafico do servidor: so o superadmin e a conta da Sysrs.
 @app.route("/api/relay", methods=["GET"])
 @require_auth
+@require_sysrs_ou_super
 def relay_stats():
     try:
         conn = get_db()
@@ -1194,13 +1305,15 @@ def relay_stats():
 
 
 # ------------------------------------------------------------
-# LOCALIZAR um ID em qualquer catalogo, ignorando os filtros da tela
+# LOCALIZAR um ID na conta, ignorando os filtros da tela
 # ------------------------------------------------------------
 # Usado pelo botao "Acessar" da busca: quando o ID digitado nao aparece na
 # lista (por causa do catalogo ou dos filtros Ativo/Instalado/Servidor), a
 # tela pergunta aqui onde ele esta, pra explicar no hint o que o esconde.
+# So enxerga os dispositivos da conta de quem esta logado.
 @app.route("/api/devices/localizar", methods=["GET"])
 @require_auth
+@require_admin_empresa
 def localizar_device():
     device_id = (request.args.get("id") or "").strip()
     if not device_id.isdigit():
@@ -1209,11 +1322,12 @@ def localizar_device():
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "SELECT d.id, d.cliente, d.apelido, d.ativo, d.servidor, d.instalado, "
-        "d.catalogo, c.nome AS catalogo_nome "
-        "FROM devices d LEFT JOIN catalogos c ON c.catalogo = d.catalogo "
-        "WHERE d.id = %s",
-        (device_id,)
+        "SELECT d.id, dc.cliente, dc.apelido, dc.ativo, dc.servidor, d.instalado, "
+        "dc.catalogo, c.nome AS catalogo_nome "
+        "FROM devices_contas dc JOIN devices d ON d.id = dc.dispositivo "
+        "JOIN catalogos c ON c.conta = dc.conta AND c.catalogo = dc.catalogo "
+        "WHERE dc.dispositivo = %s AND dc.conta = %s",
+        (device_id, request.usuario_id)
     )
     row = cur.fetchone()
     cur.close()
@@ -1221,13 +1335,22 @@ def localizar_device():
 
     if not row:
         return jsonify({"success": True, "encontrado": False})
-
     return jsonify({"success": True, "encontrado": True, "device": dict(row)})
+
+
+def _device_da_conta(cur, device_id):
+    # True se o dispositivo esta ligado a conta de quem esta logado.
+    cur.execute("SELECT 1 FROM devices_contas WHERE dispositivo = %s AND conta = %s",
+                (device_id, request.usuario_id))
+    return cur.fetchone() is not None
 
 
 # ------------------------------------------------------------
 # HISTORICO de auditoria de conexoes de um dispositivo
 # ------------------------------------------------------------
+# Cada conta ve os acessos dos proprios tecnicos (auditoria.conta) e as
+# tentativas sem conta (conta nula: nao chegaram ao login, ou vieram de quem
+# nao e tecnico de ninguem - e o que mostra uma tentativa de invasao).
 TIPOS_ACESSO_AUDITORIA = {
     0: "Remoto",
     1: "Transferencia de arquivo",
@@ -1239,6 +1362,7 @@ TIPOS_ACESSO_AUDITORIA = {
 
 @app.route("/api/devices/<device_id>/auditoria", methods=["GET"])
 @require_auth
+@require_admin_empresa
 def get_auditoria(device_id):
     inicio_str = request.args.get("inicio")
     fim_str = request.args.get("fim")
@@ -1261,11 +1385,16 @@ def get_auditoria(device_id):
 
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    if not _device_da_conta(cur, device_id):
+        cur.close()
+        conn.close()
+        return jsonify({"success": False, "error": "Dispositivo nao encontrado"}), 404
     cur.execute(
         "SELECT inicio, fim, nome, origem, tipo, ip, permissao, autenticacao "
         "FROM auditoria WHERE dispositivo = %s AND inicio >= %s AND inicio < %s "
+        "AND (conta = %s OR conta IS NULL) "
         "ORDER BY inicio DESC",
-        (device_id, data_inicio, data_fim)
+        (device_id, data_inicio, data_fim, request.usuario_id)
     )
     rows = cur.fetchall()
     cur.close()
@@ -1293,66 +1422,39 @@ def get_auditoria(device_id):
 
 
 # ------------------------------------------------------------
-# ADICIONAR dispositivo
+# EDITAR a ficha do dispositivo na conta
 # ------------------------------------------------------------
-@app.route("/api/devices", methods=["POST"])
-@require_auth
-def add_device():
-    data = request.get_json()
-    device_id = data.get("id")
-    cliente = data.get("cliente")
-    apelido = data.get("apelido")
-    observacao = data.get("observacao", "")
-    servidor = data.get("servidor", "N")
-    catalogo = data.get("catalogo", 1)
-    usuario = request.usuario_logado
-
-    if servidor not in ("S", "N"):
-        servidor = "N"
-
-    if not all([device_id, cliente, apelido]):
-        return jsonify({"success": False, "error": "id, cliente e apelido sao obrigatorios"}), 400
-
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "INSERT INTO devices (id, cliente, apelido, observacao, usuario, servidor, catalogo) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (device_id, cliente, apelido, observacao, usuario, servidor, catalogo)
-        )
-        conn.commit()
-        return jsonify({"success": True})
-    except psycopg2.IntegrityError:
-        conn.rollback()
-        return jsonify({"success": False, "error": "Ja existe um dispositivo com esse ID"}), 409
-    finally:
-        cur.close()
-        conn.close()
-
-
-# ------------------------------------------------------------
-# EDITAR dispositivo
-# ------------------------------------------------------------
+# Cliente pode ficar vazio (nulo): as telas mostram so o apelido.
 @app.route("/api/devices/<device_id>", methods=["PUT"])
 @require_auth
+@require_admin_empresa
 def edit_device(device_id):
-    data = request.get_json()
-    cliente = data.get("cliente")
-    apelido = data.get("apelido")
-    observacao = data.get("observacao", "")
+    data = request.get_json(force=True, silent=True) or {}
+    cliente = (data.get("cliente") or "").strip() or None
+    apelido = (data.get("apelido") or "").strip()
+    # a tela de edicao nao manda a observacao: so mexe nela se vier
+    tem_observacao = "observacao" in data
+    observacao = data.get("observacao")
     ativo = data.get("ativo", "S")
     servidor = data.get("servidor", "N")
+
     if ativo not in ("S", "N"):
         ativo = "S"
     if servidor not in ("S", "N"):
         servidor = "N"
+    if not apelido:
+        return jsonify({"success": False, "error": "Informe o apelido"}), 400
+    if len(apelido) > 100 or (cliente and len(cliente) > 100):
+        return jsonify({"success": False, "error": "Cliente e apelido têm no máximo 100 caracteres"}), 400
 
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE devices SET cliente=%s, apelido=%s, observacao=%s, ativo=%s, servidor=%s, atualizado=NOW() WHERE id=%s",
-        (cliente, apelido, observacao, ativo, servidor, device_id)
+        "UPDATE devices_contas SET cliente=%s, apelido=%s, "
+        "observacao = CASE WHEN %s THEN %s ELSE observacao END, ativo=%s, servidor=%s, "
+        "usuario=%s, atualizado=NOW() WHERE dispositivo=%s AND conta=%s",
+        (cliente, apelido, tem_observacao, observacao, ativo, servidor, request.usuario_logado,
+         device_id, request.usuario_id)
     )
     conn.commit()
     updated = cur.rowcount
@@ -1366,18 +1468,20 @@ def edit_device(device_id):
 
 
 # ------------------------------------------------------------
-# LIBERAR NOVA MAQUINA (item 9) - so admin. Apaga devices.uuid; o proximo
-# contato do MrDesk (heartbeat em segundos) grava o uuid novo.
+# LIBERAR NOVA MAQUINA (item 9) - so a conta da Sysrs. Apaga devices.uuid; o
+# proximo contato do MrDesk (heartbeat em segundos) grava o uuid novo.
 # ------------------------------------------------------------
 @app.route("/api/devices/<device_id>/liberar-maquina", methods=["POST"])
 @require_auth
-@require_admin
+@require_sysrs
 def liberar_maquina(device_id):
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("UPDATE devices SET uuid = NULL WHERE id = %s", (device_id,))
-    conn.commit()
-    atualizado = cur.rowcount
+    atualizado = 0
+    if _device_da_conta(cur, device_id):
+        cur.execute("UPDATE devices SET uuid = NULL WHERE id = %s", (device_id,))
+        conn.commit()
+        atualizado = cur.rowcount
     cur.close()
     conn.close()
     if atualizado == 0:
@@ -1389,8 +1493,8 @@ def liberar_maquina(device_id):
 
 
 # ------------------------------------------------------------
-# LICENCA MR1 do dispositivo (item 30) - so admin. Liga a licenca do ERP
-# (licencas.id_mrdesk) ao dispositivo, pra coluna "Versao MR1" da lista.
+# LICENCA MR1 do dispositivo (item 30) - so a conta da Sysrs. Liga a licenca
+# do ERP (licencas.id_mrdesk) ao dispositivo, pra coluna "Versao MR1" da lista.
 # Busca pelo CNPJ, so licencas com antigo = 'N'. Um dispositivo tem no maximo
 # uma licenca (ligar outra desliga a anterior); uma licenca ja ligada a outro
 # dispositivo passa pra este.
@@ -1402,7 +1506,7 @@ def _licenca_json(r):
 
 @app.route("/api/licencas", methods=["GET"])
 @require_auth
-@require_admin
+@require_sysrs
 def buscar_licencas():
     cnpj = "".join(c for c in (request.args.get("cnpj") or "") if c.isalnum()).upper()
     if not cnpj:
@@ -1422,7 +1526,7 @@ def buscar_licencas():
 
 @app.route("/api/devices/<device_id>/licenca", methods=["GET"])
 @require_auth
-@require_admin
+@require_sysrs
 def licenca_do_device(device_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1436,7 +1540,7 @@ def licenca_do_device(device_id):
 
 @app.route("/api/devices/<device_id>/licenca", methods=["PUT", "DELETE"])
 @require_auth
-@require_admin
+@require_sysrs
 def ligar_licenca(device_id):
     data = request.get_json(silent=True) or {}
     cnpj = "".join(c for c in str(data.get("cnpj") or "") if c.isalnum()).upper()
@@ -1447,8 +1551,7 @@ def ligar_licenca(device_id):
     conn = get_db()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT 1 FROM devices WHERE id = %s", (device_id,))
-        if not cur.fetchone():
+        if not _device_da_conta(cur, device_id):
             return jsonify({"success": False, "error": "Dispositivo nao encontrado"}), 404
         # um dispositivo tem no maximo uma licenca: desliga a atual
         cur.execute("UPDATE licencas SET id_mrdesk = NULL WHERE id_mrdesk = %s", (device_id,))
@@ -1468,26 +1571,35 @@ def ligar_licenca(device_id):
 
 
 # ------------------------------------------------------------
-# MOVER dispositivo de catalogo
+# MOVER dispositivo de catalogo (dentro da conta)
 # ------------------------------------------------------------
 @app.route("/api/devices/<device_id>/catalogo", methods=["PUT"])
 @require_auth
+@require_admin_empresa
 def mover_catalogo(device_id):
-    data = request.get_json()
-    novo_catalogo = data.get("catalogo")
-    if not novo_catalogo:
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        novo_catalogo = int(data.get("catalogo"))
+    except (TypeError, ValueError):
         return jsonify({"success": False, "error": "catalogo e obrigatorio"}), 400
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(
-        "UPDATE devices SET catalogo=%s, atualizado=NOW() WHERE id=%s",
-        (novo_catalogo, device_id)
-    )
-    conn.commit()
-    updated = cur.rowcount
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            "UPDATE devices_contas SET catalogo=%s, usuario=%s, atualizado=NOW() "
+            "WHERE dispositivo=%s AND conta=%s",
+            (novo_catalogo, request.usuario_logado, device_id, request.usuario_id)
+        )
+        conn.commit()
+        updated = cur.rowcount
+    except psycopg2.errors.ForeignKeyViolation:
+        # fk_devices_contas_catalogo: o catalogo nao e desta conta
+        conn.rollback()
+        return jsonify({"success": False, "error": "Catalogo nao encontrado"}), 404
+    finally:
+        cur.close()
+        conn.close()
 
     if updated == 0:
         return jsonify({"success": False, "error": "Dispositivo nao encontrado"}), 404
@@ -1496,30 +1608,20 @@ def mover_catalogo(device_id):
 
 
 # ------------------------------------------------------------
-# EXCLUIR dispositivo
+# REMOVER o dispositivo da conta
 # ------------------------------------------------------------
+# Apaga so a ligacao (a ficha desta conta). O dispositivo, o historico de
+# auditoria e a ligacao com outras contas continuam. Se um tecnico da conta
+# acessar a maquina de novo, ela volta (com ficha nova).
 @app.route("/api/devices/<device_id>", methods=["DELETE"])
 @require_auth
 @require_admin_empresa
 def delete_device(device_id):
     conn = get_db()
     cur = conn.cursor()
-    try:
-        cur.execute("DELETE FROM devices WHERE id = %s", (device_id,))
-        conn.commit()
-    except psycopg2.errors.ForeignKeyViolation as e:
-        # fk_auditoria_device (tem historico) ou fk_tecnico_device (e o
-        # MrDeskPro de um tecnico). Excluir apagaria/"orfanaria" o historico e,
-        # se o heartbeat recriasse o device com o mesmo ID, ele herdaria o
-        # historico antigo. Por isso: desativar em vez de excluir.
-        conn.rollback()
-        cur.close()
-        conn.close()
-        if e.diag.constraint_name == "fk_tecnico_device":
-            erro = "Dispositivo cadastrado em Técnicos autorizados não pode ser excluído; desative-o."
-        else:
-            erro = "Dispositivo com histórico de conexões não pode ser excluído; desative-o."
-        return jsonify({"success": False, "error": erro}), 409
+    cur.execute("DELETE FROM devices_contas WHERE dispositivo = %s AND conta = %s",
+                (device_id, request.usuario_id))
+    conn.commit()
     deleted = cur.rowcount
     cur.close()
     conn.close()
@@ -1723,10 +1825,11 @@ def heartbeat():
         # Dispositivo desconhecido: cria um registro minimo.
         # O /api/sysinfo (que chega poucos minutos depois) completa
         # os dados (hostname, SO, etc).
+        # (item 41: fica "sem conta" ate o primeiro acesso de um tecnico)
         cur.execute(
-            "INSERT INTO devices (id, cliente, apelido, usuario, catalogo, ultima_vez_online, uuid) "
-            "VALUES (%s, %s, %s, %s, %s, NOW(), %s) ON CONFLICT (id) DO NOTHING",
-            (device_id, "A definir", device_id, "sistema", 1, uuid_env)
+            "INSERT INTO devices (id, ultima_vez_online, uuid) "
+            "VALUES (%s, NOW(), %s) ON CONFLICT (id) DO NOTHING",
+            (device_id, uuid_env)
         )
     conn.commit()
     cur.close()
@@ -1742,7 +1845,6 @@ def sysinfo():
     if not device_id:
         return jsonify({})
 
-    hostname = data.get("hostname") or device_id
     # O MrDesk ja manda isso no sysinfo (codigo do RustDesk, get_sysinfo):
     # os ("windows / Windows 10 Pro - 10.0.19045"), memory ("8GB"),
     # cpu ("Intel..., 1.8GHz, 8/4 cores") e hostname. Colunas criadas em 01/10.
@@ -1770,13 +1872,13 @@ def sysinfo():
         cur.close()
         conn.close()
         return jsonify({})
-    cur.execute("SELECT id, apelido FROM devices WHERE id = %s", (device_id,))
+    cur.execute("SELECT id FROM devices WHERE id = %s", (device_id,))
     row = cur.fetchone()
 
     if row:
-        # Ja existe: nao mexe em apelido/cliente (o tecnico pode ja
-        # ter personalizado), so atualiza a observacao com o SO e
-        # marca que esta vivo agora. instalado so e sobrescrito quando o
+        # Ja existe: atualiza os dados da maquina e marca que esta vivo agora
+        # (a ficha - cliente, apelido - e de cada conta, em devices_contas).
+        # instalado so e sobrescrito quando o
         # client manda o campo (CASE mantem o valor atual quando vier NULL) -
         # um unico UPDATE, priorizando performance (1 round-trip em vez de 2).
         # (observacao deixou de receber o SO em 01/10 - o SO vai pra coluna sistema)
@@ -1790,11 +1892,10 @@ def sysinfo():
         )
     else:
         cur.execute(
-            "INSERT INTO devices (id, cliente, apelido, usuario, catalogo, ultima_vez_online, instalado, "
+            "INSERT INTO devices (id, ultima_vez_online, instalado, "
             "sistema, memoria, processador, computador, uuid) "
-            "VALUES (%s, %s, %s, %s, %s, NOW(), COALESCE(%s, 'S'), %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
-            (device_id, "A definir", hostname, "sistema", 1, instalado, sistema, memoria, processador, computador,
-             uuid_env)
+            "VALUES (%s, NOW(), COALESCE(%s, 'S'), %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+            (device_id, instalado, sistema, memoria, processador, computador, uuid_env)
         )
 
     conn.commit()
@@ -2068,8 +2169,9 @@ def lista_tecnicos_cache():
 # - Sessao vale 30 dias (depois, entrar de novo). Usuario, admin da empresa
 #   ou MrDeskPro desativado, ou senha trocada -> a sessao cai na proxima
 #   conferencia.
-# - Catalogo: devices ativo = S, instalado = S e servidor = S; somente leitura;
-#   sem senha/hash (o RustDesk permite guardar atalho de senha no catalogo).
+# - Catalogo (item 41): os dispositivos ativos da conta do tecnico; o tecnico
+#   pode renomear (apelido) e trocar a etiqueta (catalogo); sem senha/hash (o
+#   RustDesk permite guardar atalho de senha no catalogo).
 serializer_pro = URLSafeTimedSerializer(config.APP_SECRET_KEY, salt="mrdeskpro-catalogo")
 VALIDADE_SESSAO_PRO = 60 * 60 * 24 * 30  # 30 dias
 LIMITE_LOGIN_PRO_POR_MINUTO = 10
@@ -2197,62 +2299,169 @@ def logout_pro():
     return jsonify({})
 
 
+def _conta_do_usuario(cur, usuario_id):
+    # Conta = o admin da empresa: o proprio usuario se for admin de empresa,
+    # senao o master dele. Superadmin nao tem conta (None).
+    cur.execute(
+        "SELECT CASE WHEN admin = 'S' THEN usuario ELSE master END FROM usuarios "
+        "WHERE usuario = %s AND master IS NOT NULL",
+        (usuario_id,)
+    )
+    r = cur.fetchone()
+    return r[0] if r else None
+
+
+def _fichas_pro(cur, conta):
+    # Dispositivos ativos da conta, como o MrDeskPro mostra. Cliente nulo: o
+    # card mostra so o apelido (vai no lugar do cliente e a direita fica vazio).
+    cur.execute(
+        "SELECT d.id, dc.cliente, dc.apelido, d.sistema, c.nome AS catalogo_nome "
+        "FROM devices_contas dc JOIN devices d ON d.id = dc.dispositivo "
+        "JOIN catalogos c ON c.conta = dc.conta AND c.catalogo = dc.catalogo "
+        "WHERE dc.conta = %s AND dc.ativo = 'S' "
+        "ORDER BY COALESCE(dc.cliente, dc.apelido), dc.apelido",
+        (conta,)
+    )
+    fichas = []
+    for id_, cliente, apelido, sistema, catalogo_nome in cur.fetchall():
+        cliente = (cliente or "").strip()
+        fichas.append({
+            "id": id_,
+            "esquerda": cliente or (apelido or ""),
+            "direita": (apelido or "") if cliente else "",
+            "sistema": sistema or "",
+            "catalogo": (catalogo_nome or "").strip(),
+        })
+    return fichas
+
+
 @app.route("/api/ab", methods=["GET"])
 def catalogo_pro():
     import json as _json
-    if not _sessao_pro():
+    sessao = _sessao_pro()
+    if not sessao:
         return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
 
     conn = get_db()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
-        "SELECT d.id, d.cliente, d.apelido, d.sistema, c.nome AS catalogo_nome "
-        "FROM devices d LEFT JOIN catalogos c ON c.catalogo = d.catalogo "
-        "WHERE d.ativo = 'S' AND d.instalado = 'S' AND d.servidor = 'S' "
-        "ORDER BY d.cliente, d.apelido"
-    )
-    rows = cur.fetchall()
+    cur = conn.cursor()
+    conta = _conta_do_usuario(cur, sessao[0])
+    fichas = _fichas_pro(cur, conta)
+    # etiquetas = todos os catalogos da conta (inclusive os vazios, pra poder mover pra eles)
+    cur.execute("SELECT nome FROM catalogos WHERE conta = %s ORDER BY catalogo", (conta,))
+    tags = [(r[0] or "").strip() for r in cur.fetchall() if (r[0] or "").strip()]
+    # este MrDeskPro esta com o catalogo em dia a partir de agora
+    cur.execute("UPDATE tecnicos_autorizados SET catalogo_lido = NOW() WHERE dispositivo = %s", (sessao[1],))
+    conn.commit()
     cur.close()
     conn.close()
 
-    peers = []
-    tags = []
-    for r in rows:
-        tag = (r["catalogo_nome"] or "").strip()
-        if tag and tag not in tags:
-            tags.append(tag)
-        peers.append({
-            "id": r["id"],
-            "username": r["cliente"] or "",   # 2a linha do card, a esquerda
-            "hostname": r["apelido"] or "",   # 2a linha do card, a direita
-            "alias": "",
-            "platform": "Windows" if (r["sistema"] or "").lower().startswith("windows") else "",
-            "tags": [tag] if tag else [],
-        })
+    peers = [{
+        "id": f["id"],
+        "username": f["esquerda"],   # 2a linha do card, a esquerda
+        "hostname": f["direita"],    # 2a linha do card, a direita
+        "alias": "",
+        "platform": "Windows" if f["sistema"].lower().startswith("windows") else "",
+        "tags": [f["catalogo"]] if f["catalogo"] else [],
+    } for f in fichas]
     dados = {"tags": tags, "peers": peers, "tag_colors": "{}"}
     return jsonify({"data": _json.dumps(dados, ensure_ascii=False)})
 
 
-# O catalogo e somente leitura (vem do painel), mas o MrDeskPro tenta gravar
-# sozinho em varias situacoes - por exemplo a cada conexao com senha lembrada
-# ele manda o catalogo de volta com o resumo da senha. Recusar com erro fazia
-# aparecer "Nao foi possivel sincronizar o diretorio com o servidor" a cada
-# acesso (02/10). Entao aceitamos e IGNORAMOS o conteudo (nada e gravado):
-# resposta vazia = sucesso pro MrDeskPro; na proxima abertura ele recebe de
-# novo a lista do painel.
+# O MrDeskPro manda o catalogo INTEIRO de volta em varias situacoes: quando o
+# tecnico renomeia um dispositivo ou troca a etiqueta, e tambem sozinho, a cada
+# conexao com senha lembrada (manda o resumo da senha). Recusar com erro fazia
+# aparecer "Nao foi possivel sincronizar o diretorio com o servidor" (02/10),
+# entao a resposta e sempre vazia = sucesso.
+# Item 41: duas edicoes valem (o modo simples do catalogo nao tem anotacao):
+#   - renomear ("alias")  -> grava no apelido da ficha da conta
+#   - trocar a etiqueta   -> move pro catalogo com aquele nome (da conta)
+# Incluir, excluir e o resto do conteudo continuam ignorados.
+# Como a copia que o MrDeskPro manda pode estar velha, a alteracao so vale pra
+# ficha que nao mudou depois da ultima vez que ESTE MrDeskPro baixou o
+# catalogo (tecnicos_autorizados.catalogo_lido). Senao uma copia velha
+# desfaria o que o admin fez no painel.
 @app.route("/api/ab", methods=["POST"])
-def catalogo_pro_somente_leitura():
-    if not _sessao_pro():
+def catalogo_pro_gravar():
+    import json as _json
+    sessao = _sessao_pro()
+    if not sessao:
         return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
+    usuario_id, mrdeskpro, linha = sessao
+
+    corpo = request.get_json(force=True, silent=True) or {}
+    try:
+        dados = corpo.get("data")
+        dados = _json.loads(dados) if isinstance(dados, str) else dados
+        peers = dados.get("peers") if isinstance(dados, dict) else None
+    except (ValueError, AttributeError):
+        peers = None
+    if not isinstance(peers, list):
+        return ("", 200)
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        conta = _conta_do_usuario(cur, usuario_id)
+        cur.execute("SELECT catalogo_lido FROM tecnicos_autorizados WHERE dispositivo = %s", (mrdeskpro,))
+        r = cur.fetchone()
+        lido = r[0] if r else None
+        if conta is None or lido is None:
+            return ("", 200)
+
+        cur.execute("SELECT nome, catalogo FROM catalogos WHERE conta = %s", (conta,))
+        catalogos = {(nome or "").strip(): cat for nome, cat in cur.fetchall()}
+        cur.execute(
+            "SELECT dispositivo, apelido, catalogo, atualizado <= %s FROM devices_contas "
+            "WHERE conta = %s AND ativo = 'S'",
+            (lido, conta)
+        )
+        fichas = {d: (apelido, cat, em_dia) for d, apelido, cat, em_dia in cur.fetchall()}
+        copia_em_dia = all(em_dia for _, _, em_dia in fichas.values())
+
+        alterou = False
+        for peer in peers[:5000]:
+            if not isinstance(peer, dict):
+                continue
+            ficha = fichas.get(str(peer.get("id") or ""))
+            if not ficha or not ficha[2]:
+                continue  # nao e da conta, ou a copia dele dessa ficha esta velha
+            apelido, catalogo = ficha[0], ficha[1]
+            novo_apelido = str(peer.get("alias") or "").strip()[:100] or apelido
+            novo_catalogo = catalogo
+            # A tela de etiquetas do MrDeskPro deixa marcar varias: quando o
+            # tecnico marca a nova sem desmarcar a antiga chegam as duas. Vale a
+            # que for diferente do catalogo atual (o dispositivo so fica em um).
+            tags = peer.get("tags")
+            if isinstance(tags, list):
+                marcados = [catalogos[str(t).strip()] for t in tags if str(t).strip() in catalogos]
+                outros = [c for c in marcados if c != catalogo]
+                if outros:
+                    novo_catalogo = outros[0]
+            if novo_apelido != apelido or novo_catalogo != catalogo:
+                cur.execute(
+                    "UPDATE devices_contas SET apelido = %s, catalogo = %s, usuario = %s, atualizado = NOW() "
+                    "WHERE dispositivo = %s AND conta = %s",
+                    (novo_apelido, novo_catalogo, linha[0], str(peer.get("id")), conta)
+                )
+                alterou = True
+        if alterou and copia_em_dia:
+            # A copia dele estava toda em dia e a unica mudanca veio dele mesmo:
+            # continua em dia (senao a proxima edicao dele seria recusada).
+            cur.execute("UPDATE tecnicos_autorizados SET catalogo_lido = NOW() WHERE dispositivo = %s",
+                        (mrdeskpro,))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
     return ("", 200)
 
 
 # Aba "Grupo" do MrDeskPro: depois do login ele pede grupos de dispositivos,
 # usuarios e dispositivos acessiveis (recurso do servidor Pro do RustDesk).
 # Sem estas rotas o MrDeskPro mostrava "Nao foi possivel atualizar o grupo:
-# HTTP 404". Decisao do Celso (01/10): os nossos catalogos (tabela catalogos)
-# aparecem como grupos de dispositivos; os dispositivos sao os mesmos do
-# catalogo de enderecos (ativos, instalados e servidores). Usuarios: vazio.
+# HTTP 404". Decisao do Celso (01/10): os catalogos aparecem como grupos de
+# dispositivos; os dispositivos sao os mesmos do catalogo de enderecos (item
+# 41: os ativos da conta do tecnico). Usuarios: vazio.
 # Paginacao do RustDesk: ?current=N&pageSize=100 -> {"total", "data"}.
 # Sem sessao valida: 401 (o MrDeskPro sai do login).
 def _pagina_pro(itens):
@@ -2267,11 +2476,13 @@ def _pagina_pro(itens):
 
 @app.route("/api/device-group/accessible", methods=["GET"])
 def grupos_pro():
-    if not _sessao_pro():
+    sessao = _sessao_pro()
+    if not sessao:
         return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT nome FROM catalogos ORDER BY nome")
+    cur.execute("SELECT nome FROM catalogos WHERE conta = %s ORDER BY nome",
+                (_conta_do_usuario(cur, sessao[0]),))
     grupos = [{"name": (r[0] or "").strip()} for r in cur.fetchall() if (r[0] or "").strip()]
     cur.close()
     conn.close()
@@ -2287,30 +2498,24 @@ def usuarios_pro():
 
 @app.route("/api/peers", methods=["GET"])
 def dispositivos_pro():
-    if not _sessao_pro():
+    sessao = _sessao_pro()
+    if not sessao:
         return jsonify({"error": "Sessão expirada ou não autorizada."}), 401
     conn = get_db()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
-        "SELECT d.id, d.cliente, d.apelido, d.sistema, c.nome AS catalogo_nome "
-        "FROM devices d LEFT JOIN catalogos c ON c.catalogo = d.catalogo "
-        "WHERE d.ativo = 'S' AND d.instalado = 'S' AND d.servidor = 'S' "
-        "ORDER BY d.cliente, d.apelido"
-    )
-    rows = cur.fetchall()
+    cur = conn.cursor()
+    fichas = _fichas_pro(cur, _conta_do_usuario(cur, sessao[0]))
     cur.close()
     conn.close()
     itens = [{
-        "id": r["id"],
+        "id": f["id"],
         # card: cliente a esquerda (username) e apelido a direita (device_name)
-        "info": {"username": r["cliente"] or "", "device_name": r["apelido"] or "",
-                 "os": r["sistema"] or ""},
+        "info": {"username": f["esquerda"], "device_name": f["direita"], "os": f["sistema"]},
         "status": 1,
         "user": "",
         "user_name": "",
-        "device_group_name": (r["catalogo_nome"] or "").strip(),
+        "device_group_name": f["catalogo"],
         "note": "",
-    } for r in rows]
+    } for f in fichas]
     return _pagina_pro(itens)
 
 
@@ -2356,15 +2561,16 @@ _AUDIT_SET = """
                      WHEN %(login)s THEN NULL       -- login reabre a linha (item 34)
                      ELSE auditoria.fim END,
     autenticacao = COALESCE(%(autenticacao)s, auditoria.autenticacao),
-    permissao = COALESCE(%(permissao)s, auditoria.permissao)
+    permissao = COALESCE(%(permissao)s, auditoria.permissao),
+    conta     = COALESCE(%(conta)s, auditoria.conta)
 """
 
 _AUDIT_INSERT = """
     INSERT INTO auditoria (dispositivo, acesso, sessao, ip, origem, nome, tipo, uuid, inicio, fim, permissao,
-                           autenticacao)
+                           autenticacao, conta)
     VALUES (%(dispositivo)s, {acesso}, %(sessao)s, %(ip)s, %(origem)s, %(nome)s, %(tipo)s, %(uuid)s,
             NOW(), CASE WHEN %(fecha)s THEN NOW() ELSE NULL END, COALESCE(%(permissao)s, 'P'),
-            %(autenticacao)s)
+            %(autenticacao)s, %(conta)s)
 """
 
 
@@ -2433,6 +2639,7 @@ def audit_conn():
         "login": not action,
         "permissao": permissao,
         "autenticacao": autenticacao,
+        "conta": None,
     }
 
     conn = get_db()
@@ -2442,6 +2649,31 @@ def audit_conn():
         if not _maquina_confere(cur, p["dispositivo"], p["uuid"], "auditoria"):
             conn.commit()
             return ("", 200)
+
+        # Item 41: no aviso de login, a conta do tecnico (dono do MrDeskPro que
+        # conectou) fica gravada no acesso. E, se o acesso foi permitido, o
+        # dispositivo entra na conta - e assim que a ligacao nasce (primeiro
+        # acesso que deu certo): apelido = nome do computador, sem cliente, no
+        # catalogo "Novos" da conta. Quem ja esta ligado nao muda.
+        if p["login"] and p["origem"]:
+            cur.execute(
+                "SELECT CASE WHEN u.admin = 'S' THEN u.usuario ELSE u.master END "
+                "FROM tecnicos_autorizados t JOIN usuarios u ON u.usuario = t.usuario "
+                "WHERE t.dispositivo = %s AND u.master IS NOT NULL",
+                (p["origem"],)
+            )
+            r = cur.fetchone()
+            p["conta"] = r[0] if r else None
+            if p["conta"] is not None and permissao in (None, "P"):
+                cur.execute(
+                    "INSERT INTO devices_contas (dispositivo, conta, apelido, usuario, catalogo) "
+                    "SELECT d.id, %(conta)s, COALESCE(NULLIF(TRIM(d.computador), ''), d.id), 'sistema', "
+                    "       %(novos)s "
+                    "FROM devices d WHERE d.id = %(dispositivo)s "
+                    "AND EXISTS (SELECT 1 FROM catalogos WHERE conta = %(conta)s AND catalogo = %(novos)s) "
+                    "ON CONFLICT (dispositivo, conta) DO NOTHING",
+                    dict(p, novos=CATALOGO_NOVOS)
+                )
         if acesso is not None:
             # MrDesk 1.4.10+: o numero ja identifica o acesso.
             cur.execute(

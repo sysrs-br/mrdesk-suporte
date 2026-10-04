@@ -104,10 +104,22 @@
   #app { height: 100vh; flex-direction: column; }
   #app > header { flex-shrink: 0; }
   #app > main { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; padding: 24px 24px 12px; }
-  #app > main > .barra-acoes { flex-shrink: 0; }
-  #app > main > .tabela-wrapper { flex: 1 1 auto; min-height: 0; overflow: auto; max-height: max-content; }
-  #app > main > .tabela-wrapper thead th { position: sticky; top: 0; z-index: 5; box-shadow: inset 0 -1px 0 var(--cinza-borda); }
-  #app > main > #contador, #app > main > #sem-resultados { flex-shrink: 0; }
+  /* As duas areas do main (dispositivos da conta / sem conta do superadmin) tem o mesmo esqueleto */
+  #area-dispositivos, #area-sem-conta { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #app > main .barra-acoes, #app > main .titulo-area, #app > main .subtitulo-area { flex-shrink: 0; }
+  #app > main .tabela-wrapper { flex: 1 1 auto; min-height: 0; overflow: auto; max-height: max-content; }
+  #app > main .tabela-wrapper thead th { position: sticky; top: 0; z-index: 5; box-shadow: inset 0 -1px 0 var(--cinza-borda); }
+  #app > main #contador, #app > main #sem-resultados, #app > main #contador-sem-conta, #app > main #sem-conta-vazio { flex-shrink: 0; }
+  .check-label.filtro-sem-efeito { opacity: 0.4; cursor: default; }
+  .check-label.filtro-sem-efeito::after { content: ""; }
+  .titulo-area { font-size: 16px; margin: 0 0 4px; }
+  .subtitulo-area { font-size: 13px; color: var(--texto-secundario); margin: 0 0 16px; }
+  #sem-conta-vazio { text-align: center; color: var(--texto-secundario); padding: 2rem; }
+  #contador-sem-conta { margin-top: 10px; font-size: 12px; color: var(--texto-secundario); }
+  /* Item 41: o que cada tipo de usuario nao ve */
+  #app.modo-super #area-dispositivos, #app.modo-super #combo-catalogo-wrap { display: none; }
+  #app.sem-mr1 .col-versao, #app.sem-mr1 #btn-configuracoes { display: none; }
+  #app.sem-graficos .grafico-trafego { display: none; }
   .barra-acoes { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
   .busca-wrapper { position: relative; flex: 1; min-width: 180px; }
   .busca-wrapper input[type="text"] {

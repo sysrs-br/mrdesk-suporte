@@ -5,6 +5,9 @@ let nomeUsuario = localStorage.getItem("mrdesk_nome");
 // das empresas); senão é o admin de uma empresa (cria os técnicos dele).
 let usuarioAdmin = localStorage.getItem("mrdesk_admin") === "1";
 let usuarioSuper = localStorage.getItem("mrdesk_super") === "1";
+// Conta da Sysrs: só ela tem Versão MR1, Licença MR1 e "Liberar nova máquina";
+// os gráficos do servidor são dela e do superadmin.
+let usuarioSysrs = localStorage.getItem("mrdesk_sysrs") === "1";
 let dispositivos = [];
 let catalogos = [];
 let catalogoAtual = null;
@@ -159,11 +162,22 @@ function mostrarApp() {
   document.getElementById("btn-tecnicos-autorizados").style.display = (usuarioAdmin && !usuarioSuper) ? "flex" : "none";
   document.getElementById("separador-menu-usuario").style.display = usuarioAdmin ? "block" : "none";
   document.getElementById("btn-menu-excluir-dispositivo").style.display = (usuarioAdmin && !usuarioSuper) ? "flex" : "none";
-  // Item 9: liberar nova máquina (Windows reinstalado) - só admin
-  document.getElementById("btn-menu-liberar-maquina").style.display = usuarioAdmin ? "flex" : "none";
-  document.getElementById("btn-menu-licenca").style.display = usuarioAdmin ? "flex" : "none";
-  carregarCatalogos();
-  carregarTrafego();
+  // Item 9 e 30: liberar nova máquina e Licença MR1 - só a conta da Sysrs
+  document.getElementById("btn-menu-liberar-maquina").style.display = usuarioSysrs ? "flex" : "none";
+  document.getElementById("btn-menu-licenca").style.display = usuarioSysrs ? "flex" : "none";
+  // Item 41: o superadmin não tem conta (vê só a lista "sem conta"); Versão
+  // MR1 e engrenagem só na Sysrs; gráficos do servidor só Sysrs e superadmin.
+  const app = document.getElementById("app");
+  app.classList.toggle("modo-super", usuarioSuper);
+  app.classList.toggle("sem-mr1", !usuarioSysrs);
+  app.classList.toggle("sem-graficos", !(usuarioSysrs || usuarioSuper));
+  document.getElementById("area-sem-conta").style.display = usuarioSuper ? "flex" : "none";
+  if (usuarioSuper) {
+    carregarSemConta();
+  } else {
+    carregarCatalogos();
+  }
+  if (usuarioSysrs || usuarioSuper) carregarTrafego();
 }
 
 // ---- Gráficos do cabeçalho: tráfego de saída (limite de 10 TB/mês do plano
@@ -408,6 +422,8 @@ document.getElementById("form-login").addEventListener("submit", async (e) => {
       nomeUsuario = data.name;
       usuarioAdmin = !!data.admin;
       usuarioSuper = !!data.super;
+      usuarioSysrs = !!data.sysrs;
+      localStorage.setItem("mrdesk_sysrs", usuarioSysrs ? "1" : "0");
       localStorage.setItem("mrdesk_token", token);
       localStorage.setItem("mrdesk_nome", nomeUsuario);
       localStorage.setItem("mrdesk_admin", usuarioAdmin ? "1" : "0");
@@ -434,6 +450,7 @@ function sair() {
   localStorage.removeItem("mrdesk_nome");
   localStorage.removeItem("mrdesk_admin");
   localStorage.removeItem("mrdesk_super");
+  localStorage.removeItem("mrdesk_sysrs");
   token = null;
   document.getElementById("login-senha").value = "";
   mostrarLogin();
@@ -592,19 +609,6 @@ function renderizarComboCatalogos() {
     lista.appendChild(item);
   });
 
-  const sep1 = document.createElement("div");
-  sep1.className = "combo-catalogo-separador";
-  lista.appendChild(sep1);
-
-  const adicionar = document.createElement("div");
-  adicionar.className = "combo-catalogo-item combo-catalogo-especial";
-  adicionar.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/><path d="M12 14v4M10 16h4"/></svg><span>Adicionar dispositivo</span>`;
-  adicionar.addEventListener("click", () => {
-    document.getElementById("combo-catalogo-lista").classList.remove("aberto");
-    abrirModal(null);
-  });
-  lista.appendChild(adicionar);
-
   const sep2 = document.createElement("div");
   sep2.className = "combo-catalogo-separador";
   lista.appendChild(sep2);
@@ -633,7 +637,8 @@ function renderizarComboCatalogos() {
   lista.appendChild(novo);
 
   // Editar o catalogo selecionado (nome e senha geral do tecnico) - so o admin
-  if (usuarioAdmin && catalogoAtual) {
+  // (o catálogo "Novos" é fixo: recebe as máquinas no primeiro acesso e não muda de nome)
+  if (usuarioAdmin && catalogoAtual && !catalogoAtual.fixo) {
     const editar = document.createElement("div");
     editar.className = "combo-catalogo-item combo-catalogo-especial";
     editar.innerHTML = `${ICONE_EDITAR}<span>Editar catálogo</span>`;
@@ -650,7 +655,6 @@ function abrirModalCatalogo(cat) {
   document.getElementById("erro-modal-catalogo").style.display = "none";
   document.getElementById("catalogo-id").value = cat.catalogo;
   document.getElementById("catalogo-nome").value = cat.nome || "";
-  document.getElementById("catalogo-senha-geral").checked = cat.senha_geral === "S";
   document.getElementById("overlay-form-catalogo").style.display = "flex";
 }
 
@@ -663,12 +667,11 @@ document.getElementById("form-catalogo").addEventListener("submit", async (e) =>
   e.preventDefault();
   const id = document.getElementById("catalogo-id").value;
   const nome = document.getElementById("catalogo-nome").value.trim();
-  const senha_geral = document.getElementById("catalogo-senha-geral").checked ? "S" : "N";
   const erroEl = document.getElementById("erro-modal-catalogo");
   erroEl.style.display = "none";
   try {
     const resp = await fetch(`${API}/catalogos/${id}`, {
-      method: "PUT", headers: headersAuth(), body: JSON.stringify({ nome, senha_geral })
+      method: "PUT", headers: headersAuth(), body: JSON.stringify({ nome })
     });
     const data = await resp.json();
     if (data.success) {
@@ -705,8 +708,20 @@ document.addEventListener("keydown", (e) => {
 
 // silencioso (atualização automática e depois de conectar): mantém a lista
 // na mesma posição de rolagem e não mostra alerta se a rede falhar.
+// No catálogo "Novos" os filtros não valem (o servidor mostra tudo o que
+// chegou): as caixas ficam apagadas pra deixar isso claro.
+function atualizarFiltrosDoCatalogo() {
+  const semFiltro = !!(catalogoAtual && catalogoAtual.fixo);
+  ["check-ativos", "check-instalado", "check-servidor"].forEach(id => {
+    const caixa = document.getElementById(id);
+    caixa.disabled = semFiltro;
+    caixa.closest("label").classList.toggle("filtro-sem-efeito", semFiltro);
+  });
+}
+
 async function carregarDispositivos(silencioso = false) {
-  const caixa = document.querySelector("main > .tabela-wrapper");
+  atualizarFiltrosDoCatalogo();
+  const caixa = document.querySelector("#area-dispositivos > .tabela-wrapper");
   const rolagem = caixa ? caixa.scrollTop : 0;
   try {
     const filtroAtivo = document.getElementById("check-ativos").checked ? "S" : "N";
@@ -733,7 +748,7 @@ async function carregarDispositivos(silencioso = false) {
 const CHAVE_ROLAGEM_F5 = "mrdesk_rolagem_lista";
 let rolagemDoF5Pendente = true;
 window.addEventListener("pagehide", () => {
-  const caixa = document.querySelector("main > .tabela-wrapper");
+  const caixa = document.querySelector("#area-dispositivos > .tabela-wrapper");
   if (!caixa || !catalogoAtual) return;
   try {
     sessionStorage.setItem(CHAVE_ROLAGEM_F5, JSON.stringify({ catalogo: String(catalogoAtual.catalogo), topo: caixa.scrollTop }));
@@ -745,7 +760,7 @@ function restaurarRolagemDoF5() {
   try {
     const salvo = JSON.parse(sessionStorage.getItem(CHAVE_ROLAGEM_F5) || "null");
     sessionStorage.removeItem(CHAVE_ROLAGEM_F5);
-    const caixa = document.querySelector("main > .tabela-wrapper");
+    const caixa = document.querySelector("#area-dispositivos > .tabela-wrapper");
     if (salvo && caixa && catalogoAtual && salvo.catalogo === String(catalogoAtual.catalogo)) caixa.scrollTop = salvo.topo;
   } catch (_) {}
 }
@@ -755,8 +770,10 @@ function restaurarRolagemDoF5() {
 // ações aberto.
 const ATUALIZAR_LISTA_MS = 5 * 60 * 1000;
 setInterval(() => {
-  if (document.hidden || !catalogoAtual) return;
+  if (document.hidden) return;
   if (document.getElementById("app").style.display === "none") return;
+  if (usuarioSuper) { carregarSemConta(); return; }
+  if (!catalogoAtual) return;
   if (document.getElementById("menu-flutuante").style.display === "block") return;
   carregarDispositivos(true);
 }, ATUALIZAR_LISTA_MS);
@@ -774,6 +791,11 @@ document.getElementById("check-instalado").addEventListener("change", (e) => {
   carregarDispositivos();
 });
 
+// Sem cliente informado, o dispositivo é identificado só pelo apelido.
+function rotuloDispositivo(d) {
+  return d.cliente ? `"${d.cliente}" (${d.apelido})` : `"${d.apelido}"`;
+}
+
 function renderizarTabela() {
   const termoBruto = document.getElementById("busca").value.toLowerCase();
   // Se o texto digitado for so numeros e espacos (ex: "207 575 694"
@@ -783,8 +805,8 @@ function renderizarTabela() {
   const termo = apenasNumerosEEspacos ? termoBruto.replace(/\s+/g, "") : termoBruto.trim();
 
   const filtrados = dispositivos.filter(d =>
-    d.cliente.toLowerCase().includes(termo) ||
-    d.apelido.toLowerCase().includes(termo) ||
+    (d.cliente || "").toLowerCase().includes(termo) ||
+    (d.apelido || "").toLowerCase().includes(termo) ||
     d.id.includes(termo)
   );
 
@@ -812,8 +834,8 @@ function renderizarTabela() {
           <button class="btn-conectar-icone" title="Conectar" data-acao="conectar" data-id="${d.id}">${ICONE_CONECTAR}</button>
         </div>
       </td>
-      <td style="${opacidadeConteudo}">${escapeHtml(d.cliente)}</td>
-      <td style="${opacidadeConteudo}">${escapeHtml(d.apelido)}</td>
+      <td style="${opacidadeConteudo}">${escapeHtml(d.cliente || d.apelido)}</td>
+      <td style="${opacidadeConteudo}">${d.cliente ? escapeHtml(d.apelido) : ""}</td>
       <td class="id-mono" style="${opacidadeConteudo}">${formatarId(d.id)}</td>
       <td class="data-centralizada" style="${opacidadeConteudo}">
         ${formatarDataHora(d.ultima_vez_online)}
@@ -878,6 +900,9 @@ function motivosOcultacao(dev) {
   if (!catalogoAtual || String(dev.catalogo) !== String(catalogoAtual.catalogo)) {
     motivos.push(`está no catálogo "${dev.catalogo_nome || dev.catalogo}"`);
   }
+  // No catálogo "Novos" os filtros não escondem nada
+  const novos = catalogos.find(c => c.fixo);
+  if (novos && String(dev.catalogo) === String(novos.catalogo)) return motivos;
   if ((dev.ativo || "S") !== filtroAtivo) {
     motivos.push(dev.ativo === "N" ? "está inativo" : "está ativo");
   }
@@ -901,7 +926,7 @@ function montarHintAcessar() {
   } else {
     const d = localizado.device;
     const motivos = motivosOcultacao(d);
-    hint = `${d.cliente} — ${d.apelido}`;
+    hint = d.cliente ? `${d.cliente} — ${d.apelido}` : d.apelido;
     if (motivos.length) hint += `\nOculto porque ${motivos.join(", ")}.`;
   }
   btn.title = `${hint}\nEnter ou clique para acessar.`;
@@ -1034,7 +1059,7 @@ document.getElementById("corpo-tabela").addEventListener("click", async (e) => {
 
 // A lista rola dentro da propria caixa: fecha o menu de acoes ao rolar,
 // senao ele ficaria parado longe da linha
-document.querySelector("main > .tabela-wrapper").addEventListener("scroll", () => fecharMenuFlutuante());
+document.querySelector("#area-dispositivos > .tabela-wrapper").addEventListener("scroll", () => fecharMenuFlutuante());
 
 function fecharMenuFlutuante() {
   document.getElementById("menu-flutuante").style.display = "none";
@@ -1056,13 +1081,14 @@ document.getElementById("menu-flutuante").addEventListener("click", async (e) =>
 
   if (acao === "excluir") {
     const dev = dispositivos.find(d => d.id === id);
-    if (confirm(`Confirma a exclusão do dispositivo "${dev.cliente}" (${dev.apelido})?`)) {
+    if (confirm(`Remover o dispositivo ${rotuloDispositivo(dev)} da sua conta?\n\n` +
+                `O histórico de acessos continua guardado. Se um técnico acessar essa máquina de novo, ela volta para a conta.`)) {
       const resp = await fetch(`${API}/devices/${id}`, { method: "DELETE", headers: headersAuth() });
       const data = await resp.json();
       if (data.success) {
         carregarDispositivos();
       } else {
-        alert("Erro ao excluir: " + data.error);
+        alert("Erro ao remover: " + data.error);
       }
     }
   }
@@ -1083,7 +1109,7 @@ document.getElementById("menu-flutuante").addEventListener("click", async (e) =>
   // registrada; o próximo contato do MrDesk grava a nova.
   if (acao === "liberar-maquina") {
     const dev = dispositivos.find(d => d.id === id);
-    if (confirm(`Liberar nova máquina para "${dev.cliente}" (${dev.apelido})?\n\n` +
+    if (confirm(`Liberar nova máquina para ${rotuloDispositivo(dev)}?\n\n` +
         "Use quando o Windows desse computador foi reinstalado: até liberar, ele fica off-line no painel e não gera auditoria. " +
         "O próximo contato do MrDesk registra a máquina nova.")) {
       try {
@@ -1175,7 +1201,7 @@ async function carregarLicencaAtual() {
 function abrirModalLicenca(id) {
   idParaLicenca = id;
   const dev = dispositivos.find(d => d.id === id);
-  document.getElementById("licenca-device").textContent = `${dev.cliente} (${dev.apelido}) — ID ${formatarId(id)}`;
+  document.getElementById("licenca-device").textContent = `${dev.cliente ? `${dev.cliente} (${dev.apelido})` : dev.apelido} — ID ${formatarId(id)}`;
   document.getElementById("licenca-cnpj").value = "";
   document.getElementById("lista-licencas").style.display = "none";
   document.getElementById("lista-licencas").innerHTML = "";
@@ -1343,27 +1369,18 @@ function fecharModalAuditoria() {
 document.getElementById("btn-cancelar-auditoria").addEventListener("click", fecharModalAuditoria);
 document.getElementById("btn-filtrar-auditoria").addEventListener("click", carregarAuditoria);
 
+// Só edição: o dispositivo entra na conta sozinho, no primeiro acesso de um técnico.
 function abrirModal(dev) {
+  if (!dev) return;
   document.getElementById("erro-modal").style.display = "none";
   document.getElementById("form-modal").reset();
-
-  if (dev) {
-    document.getElementById("titulo-modal").textContent = "Editar dispositivo";
-    document.getElementById("modal-id-original").value = dev.id;
-    document.getElementById("modal-id").value = formatarId(dev.id);
-    document.getElementById("modal-id").disabled = true;
-    document.getElementById("modal-apelido").value = dev.apelido;
-    document.getElementById("modal-cliente").value = dev.cliente;
-    document.getElementById("modal-ativo").checked = dev.ativo !== "N";
-    document.getElementById("modal-servidor").checked = dev.servidor === "S";
-  } else {
-    document.getElementById("titulo-modal").textContent = "Adicionar dispositivo";
-    document.getElementById("modal-id-original").value = "";
-    document.getElementById("modal-id").disabled = false;
-    document.getElementById("modal-ativo").checked = true;
-    document.getElementById("modal-servidor").checked = false;
-  }
-
+  document.getElementById("modal-id-original").value = dev.id;
+  document.getElementById("modal-id").value = formatarId(dev.id);
+  document.getElementById("modal-id").disabled = true;
+  document.getElementById("modal-apelido").value = dev.apelido || "";
+  document.getElementById("modal-cliente").value = dev.cliente || "";
+  document.getElementById("modal-ativo").checked = dev.ativo !== "N";
+  document.getElementById("modal-servidor").checked = dev.servidor === "S";
   document.getElementById("overlay").style.display = "flex";
 }
 
@@ -1391,21 +1408,11 @@ document.getElementById("form-modal").addEventListener("submit", async (e) => {
   const erroEl = document.getElementById("erro-modal");
   erroEl.style.display = "none";
 
-  const editando = !!idOriginal;
-
   try {
-    let resp;
-    if (editando) {
-      resp = await fetch(`${API}/devices/${idOriginal}`, {
-        method: "PUT", headers: headersAuth(),
-        body: JSON.stringify({ apelido, cliente, ativo, servidor })
-      });
-    } else {
-      resp = await fetch(`${API}/devices`, {
-        method: "POST", headers: headersAuth(),
-        body: JSON.stringify({ id, apelido, cliente, servidor, catalogo: catalogoAtual.catalogo })
-      });
-    }
+    const resp = await fetch(`${API}/devices/${idOriginal}`, {
+      method: "PUT", headers: headersAuth(),
+      body: JSON.stringify({ apelido, cliente, ativo, servidor })
+    });
     const data = await resp.json();
     if (data.success) {
       fecharModal();
@@ -1419,6 +1426,35 @@ document.getElementById("form-modal").addEventListener("submit", async (e) => {
     erroEl.style.display = "block";
   }
 });
+
+// ---- Dispositivos sem conta (item 41 - só o superadmin) ----
+async function carregarSemConta() {
+  try {
+    const resp = await fetch(`${API}/devices/sem-conta`, { headers: headersAuth() });
+    if (resp.status === 401) { mostrarLogin(); return; }
+    const data = await resp.json();
+    const lista = data.devices || [];
+    const corpo = document.getElementById("corpo-sem-conta");
+    corpo.innerHTML = "";
+    lista.forEach(d => {
+      const statusClasse = d.online === true ? "online" : (d.online === false ? "offline" : "");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="col-status-conectar"><span class="bolinha-status ${statusClasse}" title="${statusClasse === "online" ? "On-line" : statusClasse === "offline" ? "Off-line" : "Status desconhecido"}"></span></td>
+        <td class="id-mono">${formatarId(d.id)}</td>
+        <td>${escapeHtml(d.computador || "—")}</td>
+        <td class="col-sistema" title="${escapeHtml(d.sistema || "")}">${escapeHtml(sistemaCurto(d.sistema))}</td>
+        <td class="centralizado"><span class="${d.instalado === "N" ? "badge-nao" : "badge-sim"}">${d.instalado === "N" ? "Não" : "Sim"}</span></td>
+        <td class="data-centralizada">${d.inclusao ? formatarDataHora(d.inclusao) : "—"}</td>
+        <td class="data-centralizada">${d.ultima_vez_online ? formatarDataHora(d.ultima_vez_online) : "—"}</td>`;
+      corpo.appendChild(tr);
+    });
+    document.getElementById("sem-conta-vazio").style.display = lista.length ? "none" : "block";
+    document.getElementById("contador-sem-conta").textContent = lista.length ? `${lista.length} dispositivo(s) sem conta` : "";
+  } catch (err) {
+    document.getElementById("contador-sem-conta").textContent = "Não foi possível carregar a lista: " + err.message;
+  }
+}
 
 // ---- Gerenciar usuários ----
 

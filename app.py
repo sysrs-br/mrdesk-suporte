@@ -2355,8 +2355,16 @@ def _fichas_pro(cur, conta):
             "direita": (apelido or "") if cliente else "",
             "sistema": sistema or "",
             "catalogo": (catalogo_nome or "").strip(),
+            "cliente": cliente,
+            "apelido": (apelido or "").strip(),
         })
     return fichas
+
+
+# O que o MrDeskPro precisa ter igual ao servidor pra poder alterar uma ficha:
+# cliente, apelido e nome do catalogo, como foram mandados pra ele.
+def _versao_ficha_pro(cliente, apelido, catalogo_nome):
+    return [(cliente or "").strip(), (apelido or "").strip(), (catalogo_nome or "").strip()]
 
 
 @app.route("/api/ab", methods=["GET"])
@@ -2373,8 +2381,20 @@ def catalogo_pro():
     # etiquetas = todos os catalogos da conta (inclusive os vazios, pra poder mover pra eles)
     cur.execute("SELECT nome FROM catalogos WHERE conta = %s ORDER BY catalogo", (conta,))
     tags = [(r[0] or "").strip() for r in cur.fetchall() if (r[0] or "").strip()]
-    # este MrDeskPro esta com o catalogo em dia a partir de agora
-    cur.execute("UPDATE tecnicos_autorizados SET catalogo_lido = NOW() WHERE dispositivo = %s", (sessao[1],))
+    # este MrDeskPro esta com o catalogo em dia a partir de agora: guarda a copia
+    # que ele passa a ter (versao_catalogo_local), pra saber depois o que ele alterou
+    copia = {
+        f["id"]: {
+            "v": _versao_ficha_pro(f["cliente"], f["apelido"], f["catalogo"]),
+            "a": "",
+            "t": [f["catalogo"]] if f["catalogo"] else [],
+        } for f in fichas
+    }
+    cur.execute(
+        "UPDATE tecnicos_autorizados SET catalogo_lido = NOW(), versao_catalogo_local = %s "
+        "WHERE dispositivo = %s",
+        (psycopg2.extras.Json(copia), sessao[1])
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -2395,15 +2415,25 @@ def catalogo_pro():
 # tecnico renomeia um dispositivo ou troca a etiqueta, e tambem sozinho, a cada
 # conexao com senha lembrada (manda o resumo da senha). Recusar com erro fazia
 # aparecer "Nao foi possivel sincronizar o diretorio com o servidor" (02/10),
-# entao a resposta e sempre vazia = sucesso.
+# entao o reenvio recebe resposta vazia = sucesso. So ha erro quando o tecnico
+# alterou algo e a lista dele esta velha (04/10, ver abaixo).
 # Item 41: duas edicoes valem (o modo simples do catalogo nao tem anotacao):
 #   - renomear ("alias")  -> grava no apelido da ficha da conta
 #   - trocar a etiqueta   -> move pro catalogo com aquele nome (da conta)
 # Incluir, excluir e o resto do conteudo continuam ignorados.
-# Como a copia que o MrDeskPro manda pode estar velha, a alteracao so vale pra
-# ficha que nao mudou depois da ultima vez que ESTE MrDeskPro baixou o
-# catalogo (tecnicos_autorizados.catalogo_lido). Senao uma copia velha
-# desfaria o que o admin fez no painel.
+# O MrDeskPro reenvia o catalogo inteiro sozinho, e a copia dele pode estar
+# velha. Pra saber o que o tecnico alterou de verdade, o servidor guarda a
+# copia que cada MrDeskPro tem (tecnicos_autorizados.versao_catalogo_local):
+# por dispositivo, a ficha como foi mandada pra ele ("v": cliente, apelido,
+# catalogo) e o nome/etiquetas que ele mandou por ultimo ("a", "t").
+#   - nome ou etiquetas iguais aos da copia  -> so reenvio, ignora
+#   - diferentes, e a ficha continua como ele recebeu -> grava
+#   - diferentes, mas a ficha mudou no painel depois que ele leu -> recusa e
+#     responde com erro (o MrDeskPro mostra a mensagem no lugar do "Sucesso")
+MSG_CATALOGO_VELHO = ("A lista de dispositivos está desatualizada. "
+                      "Atualize a lista e repita a alteração.")
+
+
 @app.route("/api/ab", methods=["POST"])
 def catalogo_pro_gravar():
     import json as _json
@@ -2424,59 +2454,93 @@ def catalogo_pro_gravar():
 
     conn = get_db()
     cur = conn.cursor()
+    recusou = False
     try:
         conta = _conta_do_usuario(cur, usuario_id)
-        cur.execute("SELECT catalogo_lido FROM tecnicos_autorizados WHERE dispositivo = %s", (mrdeskpro,))
-        r = cur.fetchone()
-        lido = r[0] if r else None
-        if conta is None or lido is None:
+        if conta is None:
             return ("", 200)
+        cur.execute("SELECT versao_catalogo_local FROM tecnicos_autorizados WHERE dispositivo = %s FOR UPDATE",
+                    (mrdeskpro,))
+        r = cur.fetchone()
+        if not r:
+            return ("", 200)
+        copia = r[0] if isinstance(r[0], dict) else {}
 
         cur.execute("SELECT nome, catalogo FROM catalogos WHERE conta = %s", (conta,))
         catalogos = {(nome or "").strip(): cat for nome, cat in cur.fetchall()}
+        nomes_catalogos = {cat: nome for nome, cat in catalogos.items()}
         cur.execute(
-            "SELECT dispositivo, apelido, catalogo, atualizado <= %s FROM devices_contas "
+            "SELECT dispositivo, cliente, apelido, catalogo FROM devices_contas "
             "WHERE conta = %s AND ativo = 'S'",
-            (lido, conta)
+            (conta,)
         )
-        fichas = {d: (apelido, cat, em_dia) for d, apelido, cat, em_dia in cur.fetchall()}
-        copia_em_dia = all(em_dia for _, _, em_dia in fichas.values())
+        fichas = {d: (cliente, apelido, cat) for d, cliente, apelido, cat in cur.fetchall()}
 
-        alterou = False
+        mudou_copia = False
         for peer in peers[:5000]:
             if not isinstance(peer, dict):
                 continue
-            ficha = fichas.get(str(peer.get("id") or ""))
-            if not ficha or not ficha[2]:
-                continue  # nao e da conta, ou a copia dele dessa ficha esta velha
-            apelido, catalogo = ficha[0], ficha[1]
-            novo_apelido = str(peer.get("alias") or "").strip()[:100] or apelido
-            novo_catalogo = catalogo
-            # A tela de etiquetas do MrDeskPro deixa marcar varias: quando o
-            # tecnico marca a nova sem desmarcar a antiga chegam as duas. Vale a
-            # que for diferente do catalogo atual (o dispositivo so fica em um).
+            id_ = str(peer.get("id") or "")
+            ficha = fichas.get(id_)
+            if not ficha:
+                continue  # nao e da conta
+            cliente, apelido, catalogo = ficha
+            versao_atual = _versao_ficha_pro(cliente, apelido, nomes_catalogos.get(catalogo, ""))
+            item = copia.get(id_)
+            if not isinstance(item, dict):
+                item = None
+
+            alias = str(peer.get("alias") or "").strip()[:100]
             tags = peer.get("tags")
-            if isinstance(tags, list):
-                marcados = [catalogos[str(t).strip()] for t in tags if str(t).strip() in catalogos]
-                outros = [c for c in marcados if c != catalogo]
+            tags = [str(t).strip() for t in tags] if isinstance(tags, list) else None
+
+            # sem copia desta ficha (MrDeskPro que ainda nao releu o catalogo, ou
+            # ficha que entrou depois): compara com o que o servidor mandaria
+            alias_antes = item.get("a", "") if item else ""
+            tags_antes = item.get("t", []) if item else ([versao_atual[2]] if versao_atual[2] else [])
+
+            mudou_nome = bool(alias) and alias != alias_antes
+            mudou_tags = tags is not None and sorted(tags) != sorted(tags_antes)
+            if not mudou_nome and not mudou_tags:
+                continue  # so reenvio
+
+            # A ficha continua como este MrDeskPro recebeu?
+            if not item or item.get("v") != versao_atual:
+                recusou = True
+                continue
+
+            novo_apelido = alias if mudou_nome else apelido
+            novo_catalogo = catalogo
+            if mudou_tags:
+                # A tela de etiquetas deixa marcar varias: quando o tecnico marca
+                # a nova sem desmarcar a antiga chegam as duas. Vale a que for
+                # diferente do catalogo atual (o dispositivo so fica em um).
+                outros = [catalogos[t] for t in tags if t in catalogos and catalogos[t] != catalogo]
                 if outros:
                     novo_catalogo = outros[0]
             if novo_apelido != apelido or novo_catalogo != catalogo:
                 cur.execute(
                     "UPDATE devices_contas SET apelido = %s, catalogo = %s, usuario = %s, atualizado = NOW() "
                     "WHERE dispositivo = %s AND conta = %s",
-                    (novo_apelido, novo_catalogo, linha[0], str(peer.get("id")), conta)
+                    (novo_apelido, novo_catalogo, linha[0], id_, conta)
                 )
-                alterou = True
-        if alterou and copia_em_dia:
-            # A copia dele estava toda em dia e a unica mudanca veio dele mesmo:
-            # continua em dia (senao a proxima edicao dele seria recusada).
-            cur.execute("UPDATE tecnicos_autorizados SET catalogo_lido = NOW() WHERE dispositivo = %s",
-                        (mrdeskpro,))
+            # a copia dele passa a ser o que ele mandou, sobre a ficha como ficou
+            copia[id_] = {
+                "v": _versao_ficha_pro(cliente, novo_apelido, nomes_catalogos.get(novo_catalogo, "")),
+                "a": alias if mudou_nome else alias_antes,
+                "t": tags if tags is not None else tags_antes,
+            }
+            mudou_copia = True
+        if mudou_copia:
+            cur.execute("UPDATE tecnicos_autorizados SET versao_catalogo_local = %s WHERE dispositivo = %s",
+                        (psycopg2.extras.Json(copia), mrdeskpro))
         conn.commit()
     finally:
         cur.close()
         conn.close()
+    if recusou:
+        # 200 com "error": o MrDeskPro mostra o texto no lugar do "Sucesso"
+        return jsonify({"error": MSG_CATALOGO_VELHO})
     return ("", 200)
 
 

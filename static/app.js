@@ -713,9 +713,53 @@ document.addEventListener("click", () => {
   fecharMenuFlutuante();
 });
 
-// ESC fecha o menu do usuário, o menu de catálogo e o menu flutuante de ações da linha.
+// Regra geral das janelas (04/10/2026): ESC fecha a janela que está na frente,
+// do mesmo jeito que o botão Cancelar/Fechar dela. Vale pra qualquer janela
+// nova: basta o bloco ter id começando por "overlay" e um botão com id
+// começando por "btn-cancelar" ou "btn-fechar".
+// Formulário em que algo foi digitado não fecha com ESC, pra não perder o que
+// foi editado: aí só o botão Cancelar (ou Salvar) fecha. A janela dá uma
+// balançada pra mostrar que o ESC foi visto.
+function fecharJanelaDaFrente() {
+  const abertas = [...document.querySelectorAll('[id^="overlay"]')]
+    .filter(o => getComputedStyle(o).display !== "none");
+  if (!abertas.length) return false;
+  // a da frente é a de maior z-index; empatando, a que vem depois na página
+  const z = o => Number(getComputedStyle(o).zIndex) || 0;
+  const frente = abertas.reduce((a, b) => (z(b) >= z(a) ? b : a));
+  if (frente.dataset.editado === "1") {
+    const caixa = frente.firstElementChild;
+    if (caixa) {
+      caixa.classList.remove("janela-editada");
+      void caixa.offsetWidth;   // reinicia a animação
+      caixa.classList.add("janela-editada");
+    }
+    return true;
+  }
+  const botao = frente.querySelector('button[id^="btn-cancelar"], button[id^="btn-fechar"]');
+  if (botao) botao.click(); else frente.style.display = "none";
+  return true;
+}
+
+// Marca a janela como editada quando o usuário mexe num campo de formulário
+// dela (preencher os campos por código ao abrir não conta), e desmarca quando
+// a janela fecha.
+["input", "change"].forEach(tipo => document.addEventListener(tipo, (e) => {
+  if (!e.isTrusted || !e.target.closest || !e.target.closest("form")) return;
+  const janela = e.target.closest('[id^="overlay"]');
+  if (janela) janela.dataset.editado = "1";
+}, true));
+document.querySelectorAll('[id^="overlay"]').forEach(janela => {
+  new MutationObserver(() => {
+    if (getComputedStyle(janela).display === "none") delete janela.dataset.editado;
+  }).observe(janela, { attributes: true, attributeFilter: ["style", "class"] });
+});
+
+// ESC fecha a janela da frente; sem janela aberta, fecha o menu do usuário, o
+// menu de catálogo e o menu flutuante de ações da linha.
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
+    if (fecharJanelaDaFrente()) { e.preventDefault(); return; }
     document.getElementById("combo-catalogo-lista").classList.remove("aberto");
     document.getElementById("menu-usuario-lista").classList.remove("aberto");
     fecharMenuFlutuante();
@@ -737,6 +781,7 @@ function atualizarFiltrosDoCatalogo() {
 
 async function carregarDispositivos(silencioso = false) {
   atualizarFiltrosDoCatalogo();
+  carregarContadorDeAcessos();
   const caixa = document.querySelector("#area-dispositivos > .tabela-wrapper");
   const rolagem = caixa ? caixa.scrollTop : 0;
   try {
@@ -1447,7 +1492,7 @@ async function carregarAuditoria() {
     data.registros.forEach((r) => {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td>${formatarDataHora(r.inicio)}</td>
+        <td class="centralizado">${formatarDataHora(r.inicio)}</td>
         <td>${formatarDuracao(r.duracao_segundos)}</td>
         <td>${escapeHtml(r.nome || "-")}</td>
         <td style="text-align:right;">${r.origem ? formatarId(r.origem) : "-"}</td>
@@ -1655,9 +1700,9 @@ function renderizarTabelaUsuarios() {
       ${usuarioSuper ? "<th>Empresa</th>" : ""}
       <th>E-mail (login)</th>
       <th class="centralizado" title="Número da senha permanente que este usuário usa no MrDesk">Senha permanente</th>
-      ${usuarioSuper ? '<th class="centralizado" title="Quantas máquinas a empresa pode acessar ao mesmo tempo">Acessos simultâneos</th>' : ""}
+      ${usuarioSuper ? '<th class="centralizado" title="Acessos simultâneos: quantas máquinas a empresa pode acessar ao mesmo tempo">Acessos</th>' : ""}
       <th class="centralizado">Situação</th>
-      <th>Último login</th>
+      <th class="centralizado">Último login</th>
       <th class="acoes-linha">Ações</th>
     </tr>`;
   const corpo = document.getElementById("corpo-tabela-usuarios");
@@ -1671,9 +1716,11 @@ function renderizarTabelaUsuarios() {
       ${usuarioSuper ? `<td style="${opacidade}">${escapeHtml(u.empresa || "—")}</td>` : ""}
       <td style="${opacidade}">${escapeHtml(u.email || "—")}</td>
       <td class="centralizado" style="${opacidade}">${u.senha_permanente ? "Senha " + u.senha_permanente : "—"}</td>
-      ${usuarioSuper ? `<td class="centralizado" style="${opacidade}">${u.acessos_simultaneos || "—"}</td>` : ""}
+      ${usuarioSuper ? `<td class="centralizado" style="${opacidade}">${u.acessos_simultaneos
+        ? `<button type="button" class="link-acessos" data-acao="acessos-usuario" data-id="${u.usuario}" title="Acessos abertos agora / limite. Clique para ver a lista.">${u.acessos_abertos || 0}/${u.acessos_simultaneos}</button>`
+        : "—"}</td>` : ""}
       <td class="centralizado" style="${opacidade}">${situacaoUsuario(u)}</td>
-      <td style="${opacidade}">${u.ultimo_login ? formatarDataHora(u.ultimo_login) : "—"}</td>
+      <td class="centralizado" style="${opacidade}">${u.ultimo_login ? formatarDataHora(u.ultimo_login) : "—"}</td>
       <td class="acoes-linha">
         <button title="Editar" data-acao="editar-usuario" data-id="${u.usuario}">${ICONE_EDITAR}</button>
         ${u.ativo === "N" ? "" : `<button title="${tituloLink}" data-acao="link-usuario" data-id="${u.usuario}">${ICONE_EMAIL}</button>`}
@@ -1764,10 +1811,13 @@ function abrirModalUsuario(u) {
     // (corrigir digitação) e o superadmin trocando o admin da empresa.
     email.disabled = !(u.aguardando_senha || usuarioSuper);
     if (u.aguardando_senha) {
+      dica.dataset.curto = "Corrija se estiver errado";
       dica.textContent = "Ainda sem senha: se o e-mail estiver errado, corrija e um novo link será enviado.";
     } else if (usuarioSuper) {
+      dica.dataset.curto = "Trocar passa a empresa para outra pessoa";
       dica.textContent = "Trocar o e-mail passa a empresa para outra pessoa: a senha atual deixa de valer e o novo e-mail recebe o link.";
     } else {
+      dica.dataset.curto = "Não muda depois de criada a senha";
       dica.textContent = "O e-mail não muda depois de criada a senha. Para outra pessoa, crie um novo técnico e desative este.";
     }
   } else {
@@ -1777,6 +1827,7 @@ function abrirModalUsuario(u) {
     document.getElementById("usuario-acessos-simultaneos").value = 1;
     document.getElementById("usuario-ativo").checked = true;
     email.disabled = false;
+    dica.dataset.curto = "Recebe o link para criar a senha";
     dica.textContent = "O usuário recebe neste e-mail um link para criar a própria senha.";
   }
 
@@ -1981,4 +2032,105 @@ document.getElementById("form-tecnico").addEventListener("submit", async (e) => 
     erroEl.textContent = "Erro de conexão: " + err.message;
     erroEl.style.display = "block";
   }
+});
+
+// ---- Textos explicativos dos campos (regra de tela, 04/10/2026) ----
+// Nos formulários, a explicação de um campo não ocupa linha: vira o texto de
+// fundo do campo vazio (placeholder) e a dica que aparece ao parar o mouse no
+// campo ou no nome dele (title) - assim continua disponível depois de
+// preenchido. Basta pôr um <div class="dica-campo"> logo depois do campo; o
+// texto pode ser trocado por código (ex.: dica do e-mail) que a dica acompanha.
+function aplicarDicaDoCampo(dica) {
+  let campo = dica.previousElementSibling;
+  if (campo && !campo.matches("input, select, textarea")) campo = campo.querySelector("input, select, textarea");
+  if (!campo) return;
+  const texto = dica.textContent.trim();
+  campo.title = texto;
+  // fundo do campo: a versão curta (data-curto), pra não cortar no meio
+  if (campo.matches("input, textarea")) campo.placeholder = dica.dataset.curto || texto;
+  // o nome do campo (label logo antes) mostra a mesma dica
+  let rotulo = (campo.closest(".campo-senha") || campo).previousElementSibling;
+  if (rotulo && rotulo.tagName === "LABEL") rotulo.title = texto;
+}
+document.querySelectorAll("form div.dica-campo").forEach(dica => {
+  aplicarDicaDoCampo(dica);
+  new MutationObserver(() => aplicarDicaDoCampo(dica))
+    .observe(dica, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["data-curto"] });
+});
+
+
+// ---- Acessos abertos (limite de acessos simultâneos da empresa) ----
+// Contador "abertos/limite" no topo (admin de empresa) e janela com a lista.
+// O superadmin abre a mesma janela pela coluna "Acessos" de Gerenciar contas.
+// Não é ao vivo: atualiza junto com a lista de dispositivos (ao abrir, F5 e a
+// cada 5 min) e no botão Atualizar da janela.
+let contaDosAcessos = null; // superadmin: conta que a janela está mostrando
+
+async function buscarAcessos(conta) {
+  const resp = await fetch(`${API}/acessos${conta ? "?conta=" + conta : ""}`, { headers: headersAuth() });
+  if (resp.status === 401) { mostrarLogin(); return null; }
+  return resp.json();
+}
+
+function mostrarContadorDeAcessos(data) {
+  const btn = document.getElementById("btn-acessos");
+  document.getElementById("contador-acessos").textContent = `Acessos ${data.abertos}/${data.limite}`;
+  btn.classList.toggle("no-limite", data.abertos >= data.limite);
+  btn.style.display = "flex";
+}
+
+async function carregarContadorDeAcessos() {
+  const btn = document.getElementById("btn-acessos");
+  if (usuarioSuper) { btn.style.display = "none"; return; }
+  try {
+    const data = await buscarAcessos(null);
+    if (data && data.success) mostrarContadorDeAcessos(data);
+  } catch (_) {}
+}
+
+async function carregarJanelaDeAcessos() {
+  const erroEl = document.getElementById("erro-acessos");
+  const corpo = document.getElementById("corpo-tabela-acessos");
+  erroEl.style.display = "none";
+  try {
+    const data = await buscarAcessos(contaDosAcessos);
+    if (!data) return;
+    if (!data.success) throw new Error(data.error || "Erro ao carregar os acessos.");
+    document.getElementById("titulo-acessos").textContent =
+      `Acessos abertos${contaDosAcessos && data.empresa ? " - " + data.empresa : ""} (${data.abertos}/${data.limite})`;
+    if (!contaDosAcessos) mostrarContadorDeAcessos(data);
+    corpo.innerHTML = data.acessos.length ? "" : '<tr><td colspan="5" class="centralizado">Nenhum acesso aberto.</td></tr>';
+    data.acessos.forEach(a => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(a.tecnico || formatarId(a.origem))}</td>
+        <td style="font-family:monospace;">${escapeHtml(formatarId(a.dispositivo))}</td>
+        <td>${escapeHtml(a.apelido || "—")}</td>
+        <td>${escapeHtml(a.cliente || "—")}</td>
+        <td class="centralizado">${formatarDataHora(a.inicio)}</td>`;
+      corpo.appendChild(tr);
+    });
+  } catch (err) {
+    erroEl.textContent = err.message;
+    erroEl.style.display = "block";
+  }
+}
+
+function abrirJanelaDeAcessos(conta) {
+  contaDosAcessos = conta || null;
+  document.getElementById("corpo-tabela-acessos").innerHTML = "";
+  document.getElementById("titulo-acessos").textContent = "Acessos abertos";
+  document.getElementById("overlay-acessos").style.display = "flex";
+  carregarJanelaDeAcessos();
+}
+
+document.getElementById("btn-acessos").addEventListener("click", () => abrirJanelaDeAcessos(null));
+document.getElementById("btn-atualizar-acessos").addEventListener("click", carregarJanelaDeAcessos);
+document.getElementById("btn-fechar-acessos").addEventListener("click", () => {
+  document.getElementById("overlay-acessos").style.display = "none";
+  if (contaDosAcessos) carregarUsuarios(); // a coluna "Acessos" da lista de contas acompanha
+});
+document.getElementById("corpo-tabela-usuarios").addEventListener("click", (e) => {
+  const btn = e.target.closest('button[data-acao="acessos-usuario"]');
+  if (btn) abrirJanelaDeAcessos(Number(btn.dataset.id));
 });

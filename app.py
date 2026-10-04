@@ -816,6 +816,13 @@ def list_usuarios():
         (request.usuario_id, proprio, request.usuario_id)
     )
     rows = cur.fetchall()
+    abertos = {}
+    if request.usuario_super:
+        cur.execute(
+            "SELECT a.conta, COUNT(DISTINCT a.dispositivo) AS abertos FROM " + _SQL_ACESSOS_ABERTOS
+            + " GROUP BY a.conta"
+        )
+        abertos = {r["conta"]: r["abertos"] for r in cur.fetchall()}
     senha_minima = _senha_permanente_minima(cur)
     cur.close()
     conn.close()
@@ -834,6 +841,7 @@ def list_usuarios():
             # conta da Sysrs: a senha permanente dela (Senha 1) e fixa
             "sysrs": r["usuario"] == CONTA_SYSRS,
             "acessos_simultaneos": r["acessos_simultaneos"],
+            "acessos_abertos": abertos.get(r["usuario"], 0),
             "observacoes": r["observacoes"],
             "admin": r["admin"],
             "ativo": r["ativo"],
@@ -2282,17 +2290,81 @@ def verificar_tecnico():
 # maquina que o tecnico esta tentando acessar, se ja esta na conta, nao soma.
 # Acesso aberto de maquina sem sinal ha mais de 2 min nao conta (caiu sem
 # avisar e a auditoria ainda nao fechou).
+# Mesma regra na verificacao do limite e nas telas do painel (contador e
+# janela "Acessos abertos").
+_SQL_ACESSOS_DE = "auditoria a JOIN devices d ON d.id = a.dispositivo "
+_SQL_ACESSOS_ONDE = (
+    "WHERE a.fim IS NULL AND a.permissao = 'P' AND a.origem IS NOT NULL "
+    "AND d.ultima_vez_online > NOW() - INTERVAL '2 minutes'"
+)
+_SQL_ACESSOS_ABERTOS = _SQL_ACESSOS_DE + _SQL_ACESSOS_ONDE
+
+
 def _limite_de_acessos_atingido(cur, conta, limite, cliente):
     cur.execute(
-        "SELECT DISTINCT a.dispositivo FROM auditoria a JOIN devices d ON d.id = a.dispositivo "
-        "WHERE a.conta = %s AND a.fim IS NULL AND a.permissao = 'P' AND a.origem IS NOT NULL "
-        "AND d.ultima_vez_online > NOW() - INTERVAL '2 minutes'",
+        "SELECT DISTINCT a.dispositivo FROM " + _SQL_ACESSOS_ABERTOS + " AND a.conta = %s",
         (conta,)
     )
     abertas = {row[0] for row in cur.fetchall()}
     if cliente and cliente in abertas:
         return False
     return len(abertas) >= limite
+
+
+# Painel: acessos abertos da conta e o limite dela. O admin de empresa ve a
+# propria conta; o superadmin informa a conta (?conta=<usuario do admin>).
+# "abertos" conta maquinas (igual ao limite); a lista traz uma linha por
+# maquina e tecnico, com o inicio do acesso mais antigo ainda aberto.
+@app.route("/api/acessos", methods=["GET"])
+@require_auth
+@require_admin
+def acessos_abertos():
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    if request.usuario_super:
+        try:
+            conta = int(request.args.get("conta"))
+        except (TypeError, ValueError):
+            conta = None
+    else:
+        conta = request.usuario_id
+    cur.execute(
+        "SELECT empresa, acessos_simultaneos FROM usuarios WHERE usuario = %s AND admin = 'S' AND master IS NOT NULL",
+        (conta,)
+    )
+    dono = cur.fetchone()
+    if not dono:
+        cur.close()
+        conn.close()
+        return jsonify({"success": False, "error": "Conta não encontrada."}), 404
+    cur.execute(
+        "SELECT a.dispositivo, a.origem, MIN(a.inicio) AS inicio, MAX(a.nome) AS nome, "
+        "MAX(u.nome) AS tecnico, MAX(dc.apelido) AS apelido, MAX(dc.cliente) AS cliente "
+        "FROM " + _SQL_ACESSOS_DE +
+        "LEFT JOIN tecnicos_autorizados t ON t.dispositivo = a.origem "
+        "LEFT JOIN usuarios u ON u.usuario = t.usuario "
+        "LEFT JOIN devices_contas dc ON dc.dispositivo = a.dispositivo AND dc.conta = a.conta "
+        + _SQL_ACESSOS_ONDE + " AND a.conta = %s "
+        "GROUP BY a.dispositivo, a.origem ORDER BY MIN(a.inicio)",
+        (conta,)
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return jsonify({
+        "success": True,
+        "empresa": dono["empresa"],
+        "limite": dono["acessos_simultaneos"],
+        "abertos": len({r["dispositivo"] for r in rows}),
+        "acessos": [{
+            "dispositivo": r["dispositivo"],
+            "apelido": r["apelido"],
+            "cliente": r["cliente"],
+            "tecnico": r["tecnico"] or r["nome"],
+            "origem": r["origem"],
+            "inicio": r["inicio"].isoformat() if r["inicio"] else None,
+        } for r in rows],
+    })
 
 
 # ------------------------------------------------------------

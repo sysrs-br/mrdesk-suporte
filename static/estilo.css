@@ -150,6 +150,9 @@
   th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--cinza-borda); white-space: nowrap; }
   th { background: var(--cinza-fundo); color: var(--texto-secundario); font-weight: 500; font-size: 13px; }
   th.centralizado, td.centralizado { text-align: center; }
+  /* ESC num formulário já editado: a janela balança e não fecha */
+  @keyframes janela-editada { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+  .janela-editada { animation: janela-editada 0.18s linear 2; }
   tr:last-child td { border-bottom: none; }
   tr.linha-dispositivo:hover { background: var(--cinza-hover); }
   /* Último dispositivo acessado neste navegador */
@@ -203,20 +206,24 @@
   #sem-resultados { text-align: center; color: var(--texto-secundario); padding: 2rem; display: none; }
   #contador { margin-top: 10px; font-size: 12px; color: var(--texto-secundario); }
 
-  #overlay, #overlay-catalogo, #overlay-usuarios, #overlay-auditoria, #overlay-licenca { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 100; }
+  #overlay, #overlay-catalogo, #overlay-usuarios, #overlay-acessos, #overlay-auditoria, #overlay-licenca { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 100; }
   #overlay-form-usuario, #overlay-alterar-senha, #overlay-configuracoes { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; z-index: 150; }
   #modal, #modal-catalogo, #modal-form-usuario, #modal-alterar-senha, #modal-configuracoes { background: #fff; border-radius: 12px; padding: 24px; width: 360px; }
-  #modal-usuarios, #modal-auditoria { background: #fff; border-radius: 12px; padding: 24px; width: 820px; max-width: 95vw; max-height: 85vh; overflow-y: auto; }
+  #modal-usuarios, #modal-acessos, #modal-auditoria { background: #fff; border-radius: 12px; padding: 24px; width: 820px; max-width: 95vw; max-height: 85vh; overflow-y: auto; }
   #modal-auditoria { width: 1200px; } /* 7 colunas (Origem e Permissao) sem rolagem lateral */
+  #overlay-acessos { z-index: 110; } /* abre por cima da lista de contas (superadmin) */
+  #btn-acessos.no-limite { color: var(--vermelho); border-color: var(--vermelho); }
+  .link-acessos { background: none; border: none; padding: 0; font: inherit; color: var(--azul, #1a6fb5); cursor: pointer; text-decoration: underline; }
+  #modal-usuarios { width: 1060px; } /* lista de contas (8 colunas) e de tecnicos sem rolagem lateral */
   #corpo-tabela-auditoria td.col-ip { white-space: normal; word-break: break-all; min-width: 110px; } /* IPv6 quebra linha em vez de alargar a tabela */
-  #modal h2, #modal-catalogo h2, #modal-usuarios h2, #modal-auditoria h2, #modal-form-usuario h2, #modal-alterar-senha h2, #modal-configuracoes h2 { font-size: 16px; margin-top: 0; }
+  #modal h2, #modal-catalogo h2, #modal-usuarios h2, #modal-acessos h2, #modal-auditoria h2, #modal-form-usuario h2, #modal-alterar-senha h2, #modal-configuracoes h2 { font-size: 16px; margin-top: 0; }
   #modal label, #modal-form-usuario label, #modal-alterar-senha label, #modal-configuracoes label { display: block; font-size: 12px; color: var(--texto-secundario); margin-bottom: 4px; margin-top: 12px; }
   #modal input[type="text"], #modal-configuracoes input[type="text"], #modal-form-usuario input[type="text"], #modal-form-usuario input[type="number"], #modal-form-usuario input[type="password"], #modal-alterar-senha input[type="password"] { width: 100%; padding: 9px 10px; border: 1px solid var(--cinza-borda); border-radius: 8px; font-size: 14px; }
   #modal-auditoria input[type="date"] { padding: 7px 8px; border: 1px solid var(--cinza-borda); border-radius: 8px; font-size: 13px; margin-left: 6px; }
   .tabela-wrapper-auditoria { max-height: 420px; overflow-y: auto; }
   .tabela-wrapper-auditoria thead th { position: sticky; top: 0; z-index: 5; }
   #modal .rodape-modal, #modal-catalogo .rodape-modal, #modal-usuarios .rodape-modal, #modal-auditoria .rodape-modal, #modal-form-usuario .rodape-modal, #modal-alterar-senha .rodape-modal, #modal-configuracoes .rodape-modal { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
-  #modal .btn-cancelar, #modal-catalogo .btn-cancelar, #modal-usuarios .btn-cancelar, #modal-auditoria .btn-cancelar, #modal-form-usuario .btn-cancelar, #modal-alterar-senha .btn-cancelar, #modal-configuracoes .btn-cancelar { background: none; border: 1px solid var(--cinza-borda); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
+  #modal .btn-cancelar, #modal-catalogo .btn-cancelar, #modal-usuarios .btn-cancelar, #modal-acessos .btn-cancelar, #modal-auditoria .btn-cancelar, #modal-form-usuario .btn-cancelar, #modal-alterar-senha .btn-cancelar, #modal-configuracoes .btn-cancelar { background: none; border: 1px solid var(--cinza-borda); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
   #erro-modal, #erro-modal-usuario, #erro-alterar-senha, #erro-configuracoes { color: var(--vermelho); font-size: 12px; margin-top: 10px; display: none; }
   #modal label.destaque-servidor {
     display: flex; align-items: center; gap: 8px;
@@ -266,6 +273,8 @@
   #erro-modal-tecnico, #erro-modal-catalogo { color: var(--vermelho); font-size: 12px; margin-top: 10px; display: none; }
   #corpo-tabela-tecnicos .acoes-linha button { margin-left: 2px; }
   .dica-campo { font-size: 11px; color: var(--texto-secundario); margin-top: 4px; }
+  /* nos formularios a explicacao vira placeholder + dica do campo (app.js) */
+  form div.dica-campo { display: none; }
   .permissao-B { color: var(--vermelho); font-weight: 600; }
   .permissao-F { color: #b26a00; font-weight: 600; }
 

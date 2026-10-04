@@ -63,6 +63,10 @@
     </div>
     <div class="header-centro">Suporte Remoto da Sysrs</div>
     <div class="header-direita">
+      <button type="button" class="combo-catalogo-btn" id="btn-acessos" style="display:none;" title="Acessos abertos agora / limite de acessos simultâneos da empresa. Clique para ver a lista.">
+        <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <span id="contador-acessos">Acessos</span>
+      </button>
       <div class="combo-catalogo" id="menu-usuario-wrap">
         <button type="button" class="combo-catalogo-btn" id="btn-usuario-menu" title="Menu do usuário">
           <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.5 19a5.5 5.5 0 0 1 11 0"/></svg>
@@ -174,7 +178,7 @@
       <input type="text" id="modal-id" style="text-align:left;font-family:monospace;" required>
       <label>Cliente</label>
       <input type="text" id="modal-cliente" maxlength="100">
-      <div class="dica-campo">Pode ficar em branco: as listas mostram só o apelido.</div>
+      <div class="dica-campo" data-curto="Opcional: sem ele, a lista mostra o apelido">Pode ficar em branco: as listas mostram só o apelido.</div>
       <label>Apelido</label>
       <input type="text" id="modal-apelido" maxlength="100" required>
       <label class="destaque-servidor" title="Informe se é através deste device que o MR1 será atualizado">
@@ -244,7 +248,7 @@
       <table>
         <thead>
           <tr>
-            <th>Data</th>
+            <th class="centralizado">Data</th>
             <th>Duração</th>
             <th>Nome</th>
             <th style="text-align:right;">Origem</th>
@@ -257,6 +261,31 @@
         <tbody id="corpo-tabela-auditoria"></tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<div id="overlay-acessos">
+  <div id="modal-acessos">
+    <h2 style="text-align:center;" id="titulo-acessos">Acessos abertos</h2>
+    <div class="barra-acoes" style="margin-bottom:12px;">
+      <button type="button" class="btn-primario" id="btn-atualizar-acessos">Atualizar</button>
+      <button type="button" class="btn-cancelar" id="btn-fechar-acessos" style="margin-left:auto;">Fechar</button>
+    </div>
+    <div class="tabela-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Técnico</th>
+            <th>ID</th>
+            <th>Apelido</th>
+            <th>Cliente</th>
+            <th class="centralizado">Início</th>
+          </tr>
+        </thead>
+        <tbody id="corpo-tabela-acessos"></tbody>
+      </table>
+    </div>
+    <div id="erro-acessos" style="color:var(--vermelho);font-size:12px;margin-top:10px;display:none;"></div>
   </div>
 </div>
 
@@ -296,7 +325,7 @@
         <input type="text" id="usuario-empresa" maxlength="100">
         <label>Acessos simultâneos</label>
         <input type="number" id="usuario-acessos-simultaneos" min="1" max="999" step="1">
-        <div class="dica-campo">Quantas máquinas os técnicos desta empresa podem acessar ao mesmo tempo (1 a 999).</div>
+        <div class="dica-campo" data-curto="Máquinas ao mesmo tempo (1 a 999)">Quantas máquinas os técnicos desta empresa podem acessar ao mesmo tempo (1 a 999).</div>
       </div>
       <label>Senha permanente</label>
       <select id="usuario-senha-permanente">
@@ -363,7 +392,7 @@
       <input type="hidden" id="tecnico-dispositivo-original">
       <label>ID do MrDeskPro</label>
       <input type="text" id="tecnico-dispositivo" style="font-family:monospace;" required>
-      <div class="dica-campo">O MrDeskPro precisa ter ficado on-line ao menos uma vez.</div>
+      <div class="dica-campo" data-curto="Precisa ter ficado on-line uma vez">O MrDeskPro precisa ter ficado on-line ao menos uma vez.</div>
       <label>Técnico</label>
       <select id="tecnico-usuario" required></select>
       <label>Descrição</label>
@@ -405,7 +434,7 @@
       <input type="password" id="senha-atual" autocomplete="current-password" required>
       <label>Nova senha</label>
       <input type="password" id="senha-nova" autocomplete="new-password" required minlength="8">
-      <div class="dica-campo">Pelo menos 8 caracteres, com letra e número. As outras sessões abertas são encerradas.</div>
+      <div class="dica-campo" data-curto="Mínimo 8, com letra e número">Pelo menos 8 caracteres, com letra e número. As outras sessões abertas são encerradas.</div>
       <label>Confirmar nova senha</label>
       <input type="password" id="senha-nova-confirmar" autocomplete="new-password" required minlength="8">
       <div id="erro-alterar-senha"></div>

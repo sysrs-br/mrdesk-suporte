@@ -170,6 +170,8 @@ function mostrarApp() {
   const app = document.getElementById("app");
   app.classList.toggle("modo-super", usuarioSuper);
   app.classList.toggle("sem-mr1", !usuarioSysrs);
+  document.getElementById("busca").placeholder = usuarioSysrs
+    ? "Buscar por cliente, apelido, ID ou versão MR1" : "Buscar por cliente, apelido ou ID";
   app.classList.toggle("sem-graficos", !(usuarioSysrs || usuarioSuper));
   document.getElementById("area-sem-conta").style.display = usuarioSuper ? "flex" : "none";
   if (usuarioSuper) {
@@ -286,6 +288,10 @@ if (filtroInstaladoSalvo !== null) {
 const codigoLinkSenha = new URLSearchParams(location.search).get("senha");
 if (codigoLinkSenha) {
   abrirDefinirSenha();
+} else if (new URLSearchParams(location.search).has("esqueci")) {
+  // Veio do link "Esqueci minha senha" do MrDeskPro: abre direto na página de pedir o link
+  mostrarLogin();
+  mostrarCartaoLogin("form-esqueci");
 } else if (token) { mostrarApp(); } else { mostrarLogin(); }
 
 // ---- Criar/redefinir a senha pelo link do e-mail (item 41) ----
@@ -602,6 +608,12 @@ function renderizarComboCatalogos() {
     item.addEventListener("click", () => {
       catalogoAtual = cat;
       localStorage.setItem("mrdesk_catalogo", cat.catalogo);
+      // o grupo (Ctrl+clique) era do catálogo anterior
+      if (idsDoGrupo(document.getElementById("busca").value)) {
+        document.getElementById("busca").value = "";
+        guardarGrupoDaBusca();
+        atualizarVisibilidadeBotaoLimpar();
+      }
       document.getElementById("combo-catalogo-lista").classList.remove("aberto");
       renderizarComboCatalogos();
       carregarDispositivos();
@@ -734,6 +746,7 @@ async function carregarDispositivos(silencioso = false) {
     if (resp.status === 401) { mostrarLogin(); return; }
     const data = await resp.json();
     dispositivos = data.devices || [];
+    restaurarGrupoDaBusca();
     renderizarTabela();
     if (silencioso && caixa) caixa.scrollTop = rolagem;
     else restaurarRolagemDoF5();
@@ -801,21 +814,28 @@ function renderizarTabela() {
   // Se o texto digitado for so numeros e espacos (ex: "207 575 694"
   // colado com a formatacao), remove os espacos antes de comparar
   // com o ID puro. Buscas por texto (cliente/apelido) so recebem trim.
-  const apenasNumerosEEspacos = /^[0-9\s]+$/.test(termoBruto.trim()) && termoBruto.trim() !== "";
+  // Grupo de IDs separados por vírgula (seleção com Ctrl+clique): mostra só eles.
+  const grupo = idsDoGrupo(termoBruto);
+  const apenasNumerosEEspacos = !grupo && /^[0-9\s]+$/.test(termoBruto.trim()) && termoBruto.trim() !== "";
   const termo = apenasNumerosEEspacos ? termoBruto.replace(/\s+/g, "") : termoBruto.trim();
 
-  const filtrados = dispositivos.filter(d =>
-    (d.cliente || "").toLowerCase().includes(termo) ||
-    (d.apelido || "").toLowerCase().includes(termo) ||
-    d.id.includes(termo)
-  );
+  const filtrados = grupo
+    ? dispositivos.filter(d => grupo.includes(d.id))
+    : dispositivos.filter(d =>
+        (d.cliente || "").toLowerCase().includes(termo) ||
+        (d.apelido || "").toLowerCase().includes(termo) ||
+        d.id.includes(termo) ||
+        // coluna Versão MR1 (só a conta da Sysrs tem): compara com o texto como foi digitado
+        (d.versao_erp || "").toLowerCase().includes(termoBruto.trim())
+      );
 
   const corpo = document.getElementById("corpo-tabela");
   corpo.innerHTML = "";
 
   filtrados.forEach(d => {
     const tr = document.createElement("tr");
-    tr.className = "linha-dispositivo" + (d.id === lerUltimoAcessado() ? " ultimo-acessado" : "");
+    tr.className = "linha-dispositivo" + (d.id === lerUltimoAcessado() ? " ultimo-acessado" : "")
+      + (marcadosComCtrl.has(d.id) ? " linha-marcada" : "");
     tr.dataset.id = d.id;
     const opacidadeConteudo = d.ativo === "N" ? "opacity:0.5;" : "";
 
@@ -966,12 +986,85 @@ function escapeHtml(txt) {
   return div.innerHTML;
 }
 
+// ---- Grupo de dispositivos (pedido do Celso, 03/10) ----
+// Com o Ctrl pressionado, cada clique numa linha marca/desmarca o dispositivo.
+// Ao soltar o Ctrl, os IDs vão pra busca separados por vírgula e a lista mostra
+// só eles (útil pra acompanhar um grupo, ex.: clientes a atualizar). Com o
+// grupo já na busca, Ctrl+clique tira ou põe um dispositivo nele. Apagar a
+// busca volta ao normal. O grupo fica guardado até fechar a aba (sobrevive ao
+// F5 e à recarga automática) e vale pro catálogo em que foi montado.
+const CHAVE_GRUPO = "mrdesk_grupo_busca";
+const marcadosComCtrl = new Set();
+
+// Devolve os IDs se o texto for um grupo ("111 222 333, 444555666"); senão null.
+function idsDoGrupo(texto) {
+  if (!/[,;]/.test(texto) || !/^[0-9\s,;]+$/.test(texto)) return null;
+  return texto.split(/[,;]/).map(t => t.replace(/\D/g, "")).filter(t => t);
+}
+
+function guardarGrupoDaBusca() {
+  const texto = document.getElementById("busca").value;
+  try {
+    if (idsDoGrupo(texto) && catalogoAtual) {
+      sessionStorage.setItem(CHAVE_GRUPO, JSON.stringify({ catalogo: String(catalogoAtual.catalogo), texto }));
+    } else {
+      sessionStorage.removeItem(CHAVE_GRUPO);
+    }
+  } catch (e) { /* sem armazenamento: o grupo só não sobrevive ao F5 */ }
+}
+
+// Depois do F5: devolve o grupo à busca, se o catálogo aberto é o mesmo.
+function restaurarGrupoDaBusca() {
+  try {
+    const salvo = JSON.parse(sessionStorage.getItem(CHAVE_GRUPO) || "null");
+    if (salvo && catalogoAtual && salvo.catalogo === String(catalogoAtual.catalogo)
+        && !document.getElementById("busca").value) {
+      document.getElementById("busca").value = salvo.texto;
+      atualizarVisibilidadeBotaoLimpar();
+    }
+  } catch (e) { /* ignora */ }
+}
+
+function aplicarMarcadosComCtrl() {
+  if (!marcadosComCtrl.size) return;
+  const campo = document.getElementById("busca");
+  const grupo = new Set(idsDoGrupo(campo.value) || []);
+  // quem já estava no grupo sai; quem não estava entra
+  marcadosComCtrl.forEach(id => { if (grupo.has(id)) grupo.delete(id); else grupo.add(id); });
+  marcadosComCtrl.clear();
+  // a vírgula no fim mantém o texto como grupo mesmo com um ID só
+  campo.value = grupo.size ? [...grupo].map(formatarId).join(", ") + (grupo.size === 1 ? "," : "") : "";
+  guardarGrupoDaBusca();
+  renderizarTabela();
+  atualizarVisibilidadeBotaoLimpar();
+}
+
+document.getElementById("corpo-tabela").addEventListener("click", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.target.closest("button")) return;
+  const tr = e.target.closest("tr.linha-dispositivo");
+  if (!tr) return;
+  e.preventDefault();
+  const id = tr.dataset.id;
+  if (marcadosComCtrl.has(id)) marcadosComCtrl.delete(id); else marcadosComCtrl.add(id);
+  tr.classList.toggle("linha-marcada", marcadosComCtrl.has(id));
+});
+// evita selecionar texto ao clicar com o Ctrl
+document.getElementById("corpo-tabela").addEventListener("mousedown", (e) => {
+  if (e.ctrlKey || e.metaKey) e.preventDefault();
+});
+window.addEventListener("keyup", (e) => {
+  if (e.key === "Control" || e.key === "Meta") aplicarMarcadosComCtrl();
+});
+// soltou o Ctrl fora da janela (ex.: trocou de programa): aplica também
+window.addEventListener("blur", aplicarMarcadosComCtrl);
+
 function atualizarVisibilidadeBotaoLimpar() {
   const temTexto = document.getElementById("busca").value.length > 0;
   document.getElementById("btn-limpar-busca").style.display = temTexto ? "block" : "none";
 }
 
 document.getElementById("busca").addEventListener("input", () => {
+  guardarGrupoDaBusca();
   renderizarTabela();
   atualizarVisibilidadeBotaoLimpar();
 });
@@ -980,6 +1073,7 @@ document.getElementById("btn-limpar-busca").addEventListener("click", () => {
   const campo = document.getElementById("busca");
   campo.value = "";
   campo.focus();
+  guardarGrupoDaBusca();
   renderizarTabela();
   atualizarVisibilidadeBotaoLimpar();
 });

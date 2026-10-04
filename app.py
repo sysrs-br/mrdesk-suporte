@@ -2073,7 +2073,28 @@ def edit_tecnico(dispositivo_original):
 # por IP (em memoria, por worker do gunicorn) pra dificultar varredura.
 # Qualquer resposta que nao seja HTTP 200 com {"autorizado": ...} o MrDesk
 # trata como "servidor fora" (usa o cache de 72h, se tiver).
+# Item 6B (cinco senhas permanentes): a conta do tecnico tem um numero de
+# acesso (usuarios.acesso do admin da empresa, 1 a 5; 1 = Sysrs) e o MrDesk
+# confere so a senha permanente daquele numero. O MrDesk 1.4.11+ manda
+# "senhas": 5 nas duas consultas e recebe o numero:
+#   verificar -> {"autorizado": true, "acesso": N}
+#   lista     -> codigos SHA-256 de "<ID do MrDesk>:<ID do MrDeskPro>:<N>"
+# MrDesk mais antigo (sem "senhas") so conhece a senha 1: pra ele, tecnico de
+# acesso diferente de 1 e "nao autorizado" e fica fora da lista.
 LIMITE_VERIFICACOES_POR_MINUTO = 60
+_SQL_ACESSO_TECNICO = "COALESCE(CASE WHEN u.admin = 'S' THEN u.acesso ELSE m.acesso END, 1)"
+_SQL_TECNICOS_ATIVOS = (
+    "tecnicos_autorizados t JOIN usuarios u ON u.usuario = t.usuario "
+    "LEFT JOIN usuarios m ON m.usuario = u.master "
+    "WHERE t.ativo = 'S' AND u.ativo = 'S' AND COALESCE(m.ativo, 'S') = 'S'"
+)
+
+
+def _mrdesk_cinco_senhas(data):
+    try:
+        return int(data.get("senhas") or 0) >= 5
+    except (TypeError, ValueError):
+        return False
 _verificacoes_por_ip = {}
 _verificacoes_lock = threading.Lock()
 
@@ -2105,16 +2126,19 @@ def verificar_tecnico():
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT 1 FROM tecnicos_autorizados t JOIN usuarios u ON u.usuario = t.usuario "
-        "LEFT JOIN usuarios m ON m.usuario = u.master "
-        "WHERE t.dispositivo = %s AND t.ativo = 'S' AND u.ativo = 'S' AND COALESCE(m.ativo, 'S') = 'S'",
-        (peer,)
-    )
-    autorizado = cur.fetchone() is not None
+    cur.execute("SELECT " + _SQL_ACESSO_TECNICO + " FROM " + _SQL_TECNICOS_ATIVOS + " AND t.dispositivo = %s",
+                (peer,))
+    r = cur.fetchone()
     cur.close()
     conn.close()
-    return jsonify({"autorizado": autorizado})
+    if not r:
+        return jsonify({"autorizado": False})
+    acesso = r[0]
+    if acesso != 1 and not _mrdesk_cinco_senhas(data):
+        # MrDesk anterior a 1.4.11 so conhece a senha 1: liberar deixaria o
+        # tecnico de outra conta entrar com a senha da Sysrs.
+        return jsonify({"autorizado": False})
+    return jsonify({"autorizado": True, "acesso": acesso})
 
 
 # ------------------------------------------------------------
@@ -2143,16 +2167,16 @@ def lista_tecnicos_cache():
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT t.dispositivo FROM tecnicos_autorizados t JOIN usuarios u ON u.usuario = t.usuario "
-        "LEFT JOIN usuarios m ON m.usuario = u.master "
-        "WHERE t.ativo = 'S' AND u.ativo = 'S' AND COALESCE(m.ativo, 'S') = 'S'"
-    )
-    ids = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT t.dispositivo, " + _SQL_ACESSO_TECNICO + " FROM " + _SQL_TECNICOS_ATIVOS)
+    tecnicos = cur.fetchall()
     cur.close()
     conn.close()
 
-    lista = sorted(hashlib.sha256(f"{cliente}:{tec}".encode()).hexdigest() for tec in ids)
+    if _mrdesk_cinco_senhas(data):
+        textos = [f"{cliente}:{tec}:{acesso}" for tec, acesso in tecnicos]
+    else:
+        textos = [f"{cliente}:{tec}" for tec, acesso in tecnicos if acesso == 1]
+    lista = sorted(hashlib.sha256(t.encode()).hexdigest() for t in textos)
     return jsonify({"lista": lista, "validade_dias": VALIDADE_LISTA_DIAS})
 
 

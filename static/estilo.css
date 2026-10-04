@@ -155,6 +155,8 @@
   /* Último dispositivo acessado neste navegador */
   tr.linha-dispositivo.ultimo-acessado { background: #e3eefa; }
   tr.linha-dispositivo.ultimo-acessado:hover { background: #d3e4f7; }
+  /* marcado com Ctrl+clique, antes de virar filtro */
+  tr.linha-dispositivo.linha-marcada, tr.linha-dispositivo.linha-marcada:hover { background: #fdf0c4; }
   .id-mono { font-family: monospace; color: var(--texto-secundario); }
   td.id-mono { text-align: right !important; }
   .data-centralizada { text-align: center; color: var(--texto-secundario); font-size: 13px; }

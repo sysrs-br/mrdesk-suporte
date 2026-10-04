@@ -790,12 +790,13 @@ def list_usuarios():
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "SELECT usuario, nome, email, empresa, acesso, observacoes, admin, ativo, "
+        "SELECT usuario, nome, email, empresa, senha_permanente, observacoes, admin, ativo, "
         "senha IS NULL AS aguardando_senha, ultimo_login, inclusao, alterado "
         "FROM usuarios WHERE master = %s OR (%s AND usuario = %s) ORDER BY nome",
         (request.usuario_id, proprio, request.usuario_id)
     )
     rows = cur.fetchall()
+    senha_minima = _senha_permanente_minima(cur)
     cur.close()
     conn.close()
 
@@ -809,7 +810,7 @@ def list_usuarios():
             "nome": r["nome"],
             "email": r["email"],
             "empresa": r["empresa"],
-            "acesso": r["acesso"],
+            "senha_permanente": r["senha_permanente"],
             "observacoes": r["observacoes"],
             "admin": r["admin"],
             "ativo": r["ativo"],
@@ -820,7 +821,19 @@ def list_usuarios():
         })
 
     return jsonify({"success": True, "usuarios": usuarios, "super": request.usuario_super,
-                    "master_nome": request.usuario_logado})
+                    "master_nome": request.usuario_logado, "senha_minima": senha_minima})
+
+
+# Menor numero de senha permanente que quem esta logado pode dar a um
+# subordinado: o superadmin da qualquer um (1 a 5) ao admin de empresa; o admin
+# da aos tecnicos do numero dele ate 5.
+def _senha_permanente_minima(cur):
+    if request.usuario_super:
+        return 1
+    cur.execute("SELECT senha_permanente FROM usuarios WHERE usuario = %s", (request.usuario_id,))
+    r = cur.fetchone()
+    v = (r["senha_permanente"] if isinstance(r, dict) else r[0]) if r else None
+    return v or 1
 
 
 def _dados_usuario(data):
@@ -833,19 +846,37 @@ def _dados_usuario(data):
         return None, "Informe o nome (até 100 caracteres)."
     if not _RE_EMAIL.match(email) or len(email) > 100:
         return None, "Informe um e-mail válido."
-    empresa, acesso = None, None
+    empresa = None
     if request.usuario_super:
         empresa = (data.get("empresa") or "").strip()
         if not empresa or len(empresa) > 100:
             return None, "Informe a empresa (até 100 caracteres)."
-        try:
-            acesso = int(data.get("acesso"))
-        except (TypeError, ValueError):
-            acesso = None
-        if acesso not in (1, 2, 3, 4, 5):
-            return None, "Informe o número do acesso (1 a 5)."
+    try:
+        senha_permanente = int(data.get("senha_permanente"))
+    except (TypeError, ValueError):
+        senha_permanente = None
+    if senha_permanente not in (1, 2, 3, 4, 5):
+        return None, "Informe a senha permanente (Senha 1 a Senha 5)."
     return {"nome": nome, "email": email, "observacoes": observacoes, "ativo": ativo,
-            "empresa": empresa, "acesso": acesso}, None
+            "empresa": empresa, "senha_permanente": senha_permanente}, None
+
+
+# Regras do numero da senha permanente (o trigger tg_biu_usuarios garante as
+# mesmas no banco; aqui e pra responder com uma mensagem clara).
+def _erro_senha_permanente(cur, senha_permanente, usuario_id=None):
+    minima = _senha_permanente_minima(cur)
+    if senha_permanente < minima:
+        return f"Os técnicos desta empresa usam da Senha {minima} à Senha 5."
+    if request.usuario_super and usuario_id:
+        cur.execute(
+            "SELECT nome FROM usuarios WHERE master = %s AND senha_permanente < %s ORDER BY nome",
+            (usuario_id, senha_permanente)
+        )
+        abaixo = [(r["nome"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()]
+        if abaixo:
+            return (f"Há técnico desta empresa com senha permanente menor que a Senha {senha_permanente} "
+                    f"({', '.join(abaixo)}). Ajuste os técnicos antes.")
+    return None
 
 
 def _resposta_link(ok, erro, texto_ok):
@@ -868,12 +899,17 @@ def add_usuario():
 
     conn = get_db()
     cur = conn.cursor()
+    erro = _erro_senha_permanente(cur, d["senha_permanente"])
+    if erro:
+        cur.close()
+        conn.close()
+        return jsonify({"success": False, "error": erro}), 400
     try:
         cur.execute(
-            "INSERT INTO usuarios (nome, email, observacoes, admin, ativo, master, empresa, acesso) "
+            "INSERT INTO usuarios (nome, email, observacoes, admin, ativo, master, empresa, senha_permanente) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING usuario",
             (d["nome"], d["email"], d["observacoes"], admin, d["ativo"], request.usuario_id,
-             d["empresa"], d["acesso"])
+             d["empresa"], d["senha_permanente"])
         )
         novo_id = cur.fetchone()[0]
         if admin == "S":
@@ -907,7 +943,7 @@ def edit_usuario(usuario_id):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     # So os subordinados de quem esta logado.
     cur.execute(
-        "SELECT nome, email, observacoes, ativo, empresa, acesso, senha IS NULL AS aguardando "
+        "SELECT nome, email, observacoes, ativo, empresa, senha_permanente, senha IS NULL AS aguardando "
         "FROM usuarios WHERE usuario = %s AND master = %s",
         (usuario_id, request.usuario_id)
     )
@@ -927,12 +963,18 @@ def edit_usuario(usuario_id):
                         "error": "O e-mail não pode ser alterado depois que o usuário criou a senha. "
                                  "Crie outro usuário e desative este."}), 400
 
+    erro = _erro_senha_permanente(cur, d["senha_permanente"], usuario_id)
+    if erro:
+        cur.close()
+        conn.close()
+        return jsonify({"success": False, "error": erro}), 400
+
     ip = _ip()
     try:
         cur.execute(
             "UPDATE usuarios SET nome = %s, email = %s, observacoes = %s, ativo = %s, "
-            "empresa = %s, acesso = %s, alterado = NOW() WHERE usuario = %s",
-            (d["nome"], d["email"], d["observacoes"], d["ativo"], d["empresa"], d["acesso"], usuario_id)
+            "empresa = %s, senha_permanente = %s, alterado = NOW() WHERE usuario = %s",
+            (d["nome"], d["email"], d["observacoes"], d["ativo"], d["empresa"], d["senha_permanente"], usuario_id)
         )
         if trocou_email:
             # Outro dono: a senha antiga deixa de valer e as sessoes caem.
@@ -944,7 +986,7 @@ def edit_usuario(usuario_id):
             _log_usuario(cur, usuario_id, "E", request.usuario_id, f"{atual['email']} -> {d['email']}", ip)
         if d["ativo"] != atual["ativo"]:
             _log_usuario(cur, usuario_id, "A" if d["ativo"] == "S" else "D", request.usuario_id, None, ip)
-        mudou = [c for c in ("nome", "observacoes", "empresa", "acesso") if d[c] != atual[c]]
+        mudou = [c for c in ("nome", "observacoes", "empresa", "senha_permanente") if d[c] != atual[c]]
         if mudou:
             _log_usuario(cur, usuario_id, "T", request.usuario_id, ", ".join(mudou), ip)
         conn.commit()
@@ -2074,7 +2116,7 @@ def edit_tecnico(dispositivo_original):
 # Qualquer resposta que nao seja HTTP 200 com {"autorizado": ...} o MrDesk
 # trata como "servidor fora" (usa o cache de 72h, se tiver).
 # Item 6B (cinco senhas permanentes): a conta do tecnico tem um numero de
-# acesso (usuarios.acesso do admin da empresa, 1 a 5; 1 = Sysrs) e o MrDesk
+# acesso (usuarios.senha_permanente do tecnico, 1 a 5; 1 = reservada, Sysrs) e o MrDesk
 # confere so a senha permanente daquele numero. O MrDesk 1.4.11+ manda
 # "senhas": 5 nas duas consultas e recebe o numero:
 #   verificar -> {"autorizado": true, "acesso": N}
@@ -2082,7 +2124,8 @@ def edit_tecnico(dispositivo_original):
 # MrDesk mais antigo (sem "senhas") so conhece a senha 1: pra ele, tecnico de
 # acesso diferente de 1 e "nao autorizado" e fica fora da lista.
 LIMITE_VERIFICACOES_POR_MINUTO = 60
-_SQL_ACESSO_TECNICO = "COALESCE(CASE WHEN u.admin = 'S' THEN u.acesso ELSE m.acesso END, 1)"
+# numero da senha permanente do proprio usuario (tecnico ou admin de empresa)
+_SQL_ACESSO_TECNICO = "COALESCE(u.senha_permanente, 1)"
 _SQL_TECNICOS_ATIVOS = (
     "tecnicos_autorizados t JOIN usuarios u ON u.usuario = t.usuario "
     "LEFT JOIN usuarios m ON m.usuario = u.master "

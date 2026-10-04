@@ -1655,6 +1655,7 @@ function renderizarTabelaUsuarios() {
       ${usuarioSuper ? "<th>Empresa</th>" : ""}
       <th>E-mail (login)</th>
       <th class="centralizado" title="Número da senha permanente que este usuário usa no MrDesk">Senha permanente</th>
+      ${usuarioSuper ? '<th class="centralizado" title="Quantas máquinas a empresa pode acessar ao mesmo tempo">Acessos simultâneos</th>' : ""}
       <th class="centralizado">Situação</th>
       <th>Último login</th>
       <th class="acoes-linha">Ações</th>
@@ -1670,6 +1671,7 @@ function renderizarTabelaUsuarios() {
       ${usuarioSuper ? `<td style="${opacidade}">${escapeHtml(u.empresa || "—")}</td>` : ""}
       <td style="${opacidade}">${escapeHtml(u.email || "—")}</td>
       <td class="centralizado" style="${opacidade}">${u.senha_permanente ? "Senha " + u.senha_permanente : "—"}</td>
+      ${usuarioSuper ? `<td class="centralizado" style="${opacidade}">${u.acessos_simultaneos || "—"}</td>` : ""}
       <td class="centralizado" style="${opacidade}">${situacaoUsuario(u)}</td>
       <td style="${opacidade}">${u.ultimo_login ? formatarDataHora(u.ultimo_login) : "—"}</td>
       <td class="acoes-linha">
@@ -1723,18 +1725,25 @@ function abrirModalUsuario(u) {
   document.getElementById("usuario-master").value = nomeMasterUsuarios;
   document.getElementById("campos-usuario-empresa").style.display = usuarioSuper ? "block" : "none";
   document.getElementById("usuario-empresa").required = usuarioSuper;
+  document.getElementById("usuario-acessos-simultaneos").required = usuarioSuper;
 
-  // Senha permanente: o superadmin dá qualquer uma (1 a 5) ao admin da empresa
-  // (a 1 é reservada; começa na 2). O admin dá aos técnicos do número dele até
-  // o 5, começando no dele.
+  // Senha permanente: o superadmin dá da 2 à 5 ao admin da empresa (começa na
+  // 2). O admin dá aos técnicos do número dele até o 5, começando no dele.
+  // A Senha 1 é fixa da Sysrs: pro admin dela o campo fica travado na 1; pros
+  // outros admins a opção Senha 1 nem aparece.
+  const contaSysrs = usuarioSuper && !!(u && u.sysrs);
+  const menorSenha = usuarioSuper ? (contaSysrs ? 1 : 2) : senhaMinimaUsuarios;
   const senhaPadrao = usuarioSuper ? 2 : senhaMinimaUsuarios;
   document.querySelectorAll("#usuario-senha-permanente option").forEach(o => {
-    const fora = Number(o.value) < senhaMinimaUsuarios;
+    const fora = Number(o.value) < menorSenha;
     o.disabled = fora;
     o.hidden = fora;
   });
-  document.getElementById("dica-usuario-senha-permanente").textContent = usuarioSuper
-    ? "Senha que o administrador usa no MrDesk. Os técnicos da empresa usam desta até a Senha 5. A Senha 1 é reservada."
+  document.getElementById("usuario-senha-permanente").disabled = contaSysrs;
+  document.getElementById("dica-usuario-senha-permanente").textContent = contaSysrs
+    ? "A Senha 1 é fixa da Sysrs e não pode ser alterada."
+    : usuarioSuper
+    ? "Senha que o administrador usa no MrDesk. Os técnicos da empresa usam desta até a Senha 5. A Senha 1 é reservada para a Sysrs."
     : (senhaMinimaUsuarios > 1
         ? `Senha que o técnico usa no MrDesk (da Senha ${senhaMinimaUsuarios} à Senha 5).`
         : "Senha que o técnico usa no MrDesk.");
@@ -1748,6 +1757,7 @@ function abrirModalUsuario(u) {
     email.value = u.email || "";
     document.getElementById("usuario-empresa").value = u.empresa || "";
     document.getElementById("usuario-senha-permanente").value = String(u.senha_permanente || senhaPadrao);
+    document.getElementById("usuario-acessos-simultaneos").value = u.acessos_simultaneos || 1;
     document.getElementById("usuario-observacoes").value = u.observacoes || "";
     document.getElementById("usuario-ativo").checked = u.ativo !== "N";
     // E-mail fixo depois de criada a senha. Exceções: aguardando senha
@@ -1764,6 +1774,7 @@ function abrirModalUsuario(u) {
     document.getElementById("titulo-modal-usuario").textContent = usuarioSuper ? "Novo administrador de empresa" : "Novo técnico";
     document.getElementById("usuario-id-original").value = "";
     document.getElementById("usuario-senha-permanente").value = String(senhaPadrao);
+    document.getElementById("usuario-acessos-simultaneos").value = 1;
     document.getElementById("usuario-ativo").checked = true;
     email.disabled = false;
     dica.textContent = "O usuário recebe neste e-mail um link para criar a própria senha.";
@@ -1793,6 +1804,7 @@ document.getElementById("form-usuario").addEventListener("submit", async (e) => 
   corpo.senha_permanente = Number(document.getElementById("usuario-senha-permanente").value);
   if (usuarioSuper) {
     corpo.empresa = document.getElementById("usuario-empresa").value.trim();
+    corpo.acessos_simultaneos = Number(document.getElementById("usuario-acessos-simultaneos").value);
   }
 
   const btn = e.target.querySelector('button[type="submit"]');

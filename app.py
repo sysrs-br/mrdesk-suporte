@@ -810,7 +810,7 @@ def list_usuarios():
     conn = get_db()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "SELECT usuario, nome, email, empresa, senha_permanente, observacoes, admin, ativo, "
+        "SELECT usuario, nome, email, empresa, senha_permanente, acessos_simultaneos, observacoes, admin, ativo, "
         "senha IS NULL AS aguardando_senha, ultimo_login, inclusao, alterado "
         "FROM usuarios WHERE master = %s OR (%s AND usuario = %s) ORDER BY nome",
         (request.usuario_id, proprio, request.usuario_id)
@@ -831,6 +831,9 @@ def list_usuarios():
             "email": r["email"],
             "empresa": r["empresa"],
             "senha_permanente": r["senha_permanente"],
+            # conta da Sysrs: a senha permanente dela (Senha 1) e fixa
+            "sysrs": r["usuario"] == CONTA_SYSRS,
+            "acessos_simultaneos": r["acessos_simultaneos"],
             "observacoes": r["observacoes"],
             "admin": r["admin"],
             "ativo": r["ativo"],
@@ -866,11 +869,18 @@ def _dados_usuario(data):
         return None, "Informe o nome (até 100 caracteres)."
     if not _RE_EMAIL.match(email) or len(email) > 100:
         return None, "Informe um e-mail válido."
-    empresa = None
+    empresa, acessos_simultaneos = None, None
     if request.usuario_super:
         empresa = (data.get("empresa") or "").strip()
         if not empresa or len(empresa) > 100:
             return None, "Informe a empresa (até 100 caracteres)."
+        # Limite de acessos simultaneos da empresa (item 42)
+        try:
+            acessos_simultaneos = int(data.get("acessos_simultaneos"))
+        except (TypeError, ValueError):
+            acessos_simultaneos = None
+        if acessos_simultaneos is None or not 1 <= acessos_simultaneos <= 999:
+            return None, "Informe os acessos simultâneos (de 1 a 999)."
     try:
         senha_permanente = int(data.get("senha_permanente"))
     except (TypeError, ValueError):
@@ -878,7 +888,8 @@ def _dados_usuario(data):
     if senha_permanente not in (1, 2, 3, 4, 5):
         return None, "Informe a senha permanente (Senha 1 a Senha 5)."
     return {"nome": nome, "email": email, "observacoes": observacoes, "ativo": ativo,
-            "empresa": empresa, "senha_permanente": senha_permanente}, None
+            "empresa": empresa, "senha_permanente": senha_permanente,
+            "acessos_simultaneos": acessos_simultaneos}, None
 
 
 # Regras do numero da senha permanente (o trigger tg_biu_usuarios garante as
@@ -887,6 +898,15 @@ def _erro_senha_permanente(cur, senha_permanente, usuario_id=None):
     minima = _senha_permanente_minima(cur)
     if senha_permanente < minima:
         return f"Os técnicos desta empresa usam da Senha {minima} à Senha 5."
+    # A Senha 1 e fixa da Sysrs (04/10/2026): nenhum outro admin de empresa a
+    # recebe, e a do admin da Sysrs nao muda. Os tecnicos nao entram aqui: os da
+    # Sysrs podem ter de 1 a 5 e os das outras empresas comecam no numero do admin.
+    if request.usuario_super:
+        if usuario_id == CONTA_SYSRS:
+            if senha_permanente != 1:
+                return "A senha permanente da Sysrs é fixa: Senha 1."
+        elif senha_permanente == 1:
+            return "A Senha 1 é reservada para a Sysrs. Escolha da Senha 2 à Senha 5."
     if request.usuario_super and usuario_id:
         cur.execute(
             "SELECT nome FROM usuarios WHERE master = %s AND senha_permanente < %s ORDER BY nome",
@@ -926,10 +946,10 @@ def add_usuario():
         return jsonify({"success": False, "error": erro}), 400
     try:
         cur.execute(
-            "INSERT INTO usuarios (nome, email, observacoes, admin, ativo, master, empresa, senha_permanente) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING usuario",
+            "INSERT INTO usuarios (nome, email, observacoes, admin, ativo, master, empresa, senha_permanente, "
+            "acessos_simultaneos) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING usuario",
             (d["nome"], d["email"], d["observacoes"], admin, d["ativo"], request.usuario_id,
-             d["empresa"], d["senha_permanente"])
+             d["empresa"], d["senha_permanente"], d["acessos_simultaneos"])
         )
         novo_id = cur.fetchone()[0]
         if admin == "S":
@@ -963,7 +983,7 @@ def edit_usuario(usuario_id):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     # So os subordinados de quem esta logado.
     cur.execute(
-        "SELECT nome, email, observacoes, ativo, empresa, senha_permanente, senha IS NULL AS aguardando "
+        "SELECT nome, email, observacoes, ativo, empresa, senha_permanente, acessos_simultaneos, senha IS NULL AS aguardando "
         "FROM usuarios WHERE usuario = %s AND master = %s",
         (usuario_id, request.usuario_id)
     )
@@ -993,8 +1013,9 @@ def edit_usuario(usuario_id):
     try:
         cur.execute(
             "UPDATE usuarios SET nome = %s, email = %s, observacoes = %s, ativo = %s, "
-            "empresa = %s, senha_permanente = %s, alterado = NOW() WHERE usuario = %s",
-            (d["nome"], d["email"], d["observacoes"], d["ativo"], d["empresa"], d["senha_permanente"], usuario_id)
+            "empresa = %s, senha_permanente = %s, acessos_simultaneos = %s, alterado = NOW() WHERE usuario = %s",
+            (d["nome"], d["email"], d["observacoes"], d["ativo"], d["empresa"], d["senha_permanente"],
+             d["acessos_simultaneos"], usuario_id)
         )
         if trocou_email:
             # Outro dono: a senha antiga deixa de valer e as sessoes caem.
@@ -1006,7 +1027,7 @@ def edit_usuario(usuario_id):
             _log_usuario(cur, usuario_id, "E", request.usuario_id, f"{atual['email']} -> {d['email']}", ip)
         if d["ativo"] != atual["ativo"]:
             _log_usuario(cur, usuario_id, "A" if d["ativo"] == "S" else "D", request.usuario_id, None, ip)
-        mudou = [c for c in ("nome", "observacoes", "empresa", "senha_permanente") if d[c] != atual[c]]
+        mudou = [c for c in ("nome", "observacoes", "empresa", "senha_permanente", "acessos_simultaneos") if d[c] != atual[c]]
         if mudou:
             _log_usuario(cur, usuario_id, "T", request.usuario_id, ", ".join(mudou), ip)
         conn.commit()
@@ -2223,19 +2244,55 @@ def verificar_tecnico():
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT " + _SQL_ACESSO_TECNICO + " FROM " + _SQL_TECNICOS_ATIVOS + " AND t.dispositivo = %s",
-                (peer,))
+    cur.execute(
+        "SELECT " + _SQL_ACESSO_TECNICO + ", "
+        "CASE WHEN u.admin = 'S' THEN u.usuario ELSE u.master END, "
+        "CASE WHEN u.admin = 'S' THEN u.acessos_simultaneos ELSE m.acessos_simultaneos END "
+        "FROM " + _SQL_TECNICOS_ATIVOS + " AND t.dispositivo = %s",
+        (peer,)
+    )
     r = cur.fetchone()
-    cur.close()
-    conn.close()
     if not r:
+        cur.close()
+        conn.close()
         return jsonify({"autorizado": False})
-    acesso = r[0]
+    acesso, conta, limite = r
     if acesso != 1 and not _mrdesk_cinco_senhas(data):
         # MrDesk anterior a 1.4.11 so conhece a senha 1: liberar deixaria o
         # tecnico de outra conta entrar com a senha da Sysrs.
+        cur.close()
+        conn.close()
         return jsonify({"autorizado": False})
+    cliente = _normalizar_id(data.get("id"))
+    cheio = bool(limite) and _limite_de_acessos_atingido(cur, conta, limite, cliente)
+    cur.close()
+    conn.close()
+    if cheio:
+        # "mensagem": o MrDesk 1.4.11+ mostra o texto ao tecnico; os anteriores
+        # mostram a mensagem padrao de conexao nao permitida.
+        return jsonify({"autorizado": False,
+                        "mensagem": f"Limite de acessos simultâneos da sua empresa atingido ({limite}). "
+                                    "Encerre um acesso para abrir outro."})
     return jsonify({"autorizado": True, "acesso": acesso})
+
+
+# Item 42: limite de acessos simultaneos da empresa. Conta as MAQUINAS com
+# acesso aberto de tecnicos da conta (auditoria com login feito e sem fim):
+# controle de tela e transferencia de arquivos na mesma maquina valem um. A
+# maquina que o tecnico esta tentando acessar, se ja esta na conta, nao soma.
+# Acesso aberto de maquina sem sinal ha mais de 2 min nao conta (caiu sem
+# avisar e a auditoria ainda nao fechou).
+def _limite_de_acessos_atingido(cur, conta, limite, cliente):
+    cur.execute(
+        "SELECT DISTINCT a.dispositivo FROM auditoria a JOIN devices d ON d.id = a.dispositivo "
+        "WHERE a.conta = %s AND a.fim IS NULL AND a.permissao = 'P' AND a.origem IS NOT NULL "
+        "AND d.ultima_vez_online > NOW() - INTERVAL '2 minutes'",
+        (conta,)
+    )
+    abertas = {row[0] for row in cur.fetchall()}
+    if cliente and cliente in abertas:
+        return False
+    return len(abertas) >= limite
 
 
 # ------------------------------------------------------------

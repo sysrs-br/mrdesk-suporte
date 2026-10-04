@@ -211,7 +211,7 @@
   #corpo-tabela-auditoria td.col-ip { white-space: normal; word-break: break-all; min-width: 110px; } /* IPv6 quebra linha em vez de alargar a tabela */
   #modal h2, #modal-catalogo h2, #modal-usuarios h2, #modal-auditoria h2, #modal-form-usuario h2, #modal-alterar-senha h2, #modal-configuracoes h2 { font-size: 16px; margin-top: 0; }
   #modal label, #modal-form-usuario label, #modal-alterar-senha label, #modal-configuracoes label { display: block; font-size: 12px; color: var(--texto-secundario); margin-bottom: 4px; margin-top: 12px; }
-  #modal input[type="text"], #modal-configuracoes input[type="text"], #modal-form-usuario input[type="text"], #modal-form-usuario input[type="password"], #modal-alterar-senha input[type="password"] { width: 100%; padding: 9px 10px; border: 1px solid var(--cinza-borda); border-radius: 8px; font-size: 14px; }
+  #modal input[type="text"], #modal-configuracoes input[type="text"], #modal-form-usuario input[type="text"], #modal-form-usuario input[type="number"], #modal-form-usuario input[type="password"], #modal-alterar-senha input[type="password"] { width: 100%; padding: 9px 10px; border: 1px solid var(--cinza-borda); border-radius: 8px; font-size: 14px; }
   #modal-auditoria input[type="date"] { padding: 7px 8px; border: 1px solid var(--cinza-borda); border-radius: 8px; font-size: 13px; margin-left: 6px; }
   .tabela-wrapper-auditoria { max-height: 420px; overflow-y: auto; }
   .tabela-wrapper-auditoria thead th { position: sticky; top: 0; z-index: 5; }

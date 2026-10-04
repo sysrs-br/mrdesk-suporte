@@ -158,6 +158,7 @@ function mostrarApp() {
   document.getElementById("app").style.display = "flex";
   document.getElementById("nome-usuario").textContent = nomeUsuario;
   document.getElementById("btn-gerenciar-usuarios").style.display = usuarioAdmin ? "flex" : "none";
+  document.getElementById("rotulo-gerenciar-usuarios").textContent = usuarioSuper ? "Gerenciar contas" : "Gerenciar usuários";
   // Técnicos autorizados e exclusão de dispositivo: só o admin da empresa (não o superadmin)
   document.getElementById("btn-tecnicos-autorizados").style.display = (usuarioAdmin && !usuarioSuper) ? "flex" : "none";
   document.getElementById("separador-menu-usuario").style.display = usuarioAdmin ? "block" : "none";
@@ -1540,7 +1541,8 @@ async function carregarSemConta() {
         <td class="col-sistema" title="${escapeHtml(d.sistema || "")}">${escapeHtml(sistemaCurto(d.sistema))}</td>
         <td class="centralizado"><span class="${d.instalado === "N" ? "badge-nao" : "badge-sim"}">${d.instalado === "N" ? "Não" : "Sim"}</span></td>
         <td class="data-centralizada">${d.inclusao ? formatarDataHora(d.inclusao) : "—"}</td>
-        <td class="data-centralizada">${d.ultima_vez_online ? formatarDataHora(d.ultima_vez_online) : "—"}</td>`;
+        <td class="data-centralizada">${d.ultima_vez_online ? formatarDataHora(d.ultima_vez_online) : "—"}</td>
+        <td class="acoes-linha"><button title="Excluir" data-acao="excluir-sem-conta" data-id="${d.id}" data-nome="${escapeHtml(d.computador || "")}">${ICONE_REMOVER}</button></td>`;
       corpo.appendChild(tr);
     });
     document.getElementById("sem-conta-vazio").style.display = lista.length ? "none" : "block";
@@ -1549,6 +1551,25 @@ async function carregarSemConta() {
     document.getElementById("contador-sem-conta").textContent = "Não foi possível carregar a lista: " + err.message;
   }
 }
+
+// Superadmin exclui um dispositivo sem conta (item 10 dos testes da 1.4.11)
+document.getElementById("corpo-sem-conta").addEventListener("click", async (e) => {
+  const btn = e.target.closest('button[data-acao="excluir-sem-conta"]');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  const nome = btn.dataset.nome ? ` (${btn.dataset.nome})` : "";
+  if (!confirm(`Excluir o dispositivo ${formatarId(id)}${nome}?\n\n` +
+               "Se a máquina der sinal de novo, ela volta para esta lista.")) return;
+  try {
+    const resp = await fetch(`${API}/devices/sem-conta/${id}`, { method: "DELETE", headers: headersAuth() });
+    if (resp.status === 401) { mostrarLogin(); return; }
+    const data = await resp.json();
+    if (!data.success) { alert(data.error || "Não foi possível excluir."); return; }
+    carregarSemConta();
+  } catch (err) {
+    alert("Não foi possível excluir: " + err.message);
+  }
+});
 
 // ---- Gerenciar usuários ----
 

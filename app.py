@@ -1252,6 +1252,40 @@ def devices_sem_conta():
     return jsonify({"success": True, "devices": devices})
 
 
+# Superadmin apaga um dispositivo sem conta (ex.: maquina que so executou o
+# MrDesk por alguns segundos e nunca mais apareceu). So vale pra dispositivo
+# que nao e de nenhuma conta, nao e MrDeskPro de tecnico e nao tem auditoria
+# nem licenca ligada. Se a maquina der sinal de novo, ela volta pra lista.
+@app.route("/api/devices/sem-conta/<device_id>", methods=["DELETE"])
+@require_auth
+@require_super
+def excluir_device_sem_conta(device_id):
+    device_id = _normalizar_id(device_id)
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT 1 FROM devices WHERE id = %s FOR UPDATE", (device_id,))
+        if not cur.fetchone():
+            return jsonify({"success": False, "error": "Dispositivo não encontrado."}), 404
+        for tabela, coluna, motivo in (
+            ("devices_contas", "dispositivo", "já pertence a uma conta"),
+            ("tecnicos_autorizados", "dispositivo", "é o MrDeskPro de um técnico"),
+            ("auditoria", "dispositivo", "tem registro de acesso na auditoria"),
+            ("licencas", "id_mrdesk", "tem licença MR1 ligada"),
+        ):
+            cur.execute(f"SELECT 1 FROM {tabela} WHERE {coluna} = %s LIMIT 1", (device_id,))
+            if cur.fetchone():
+                return jsonify({"success": False,
+                                "error": f"Este dispositivo não pode ser excluído: {motivo}."}), 409
+        cur.execute("DELETE FROM devices WHERE id = %s", (device_id,))
+        conn.commit()
+        app.logger.warning("dispositivo sem conta excluido: %s por %s", device_id, request.usuario_logado)
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify({"success": True})
+
+
 # ------------------------------------------------------------
 # PEGAR link de conexao
 # ------------------------------------------------------------

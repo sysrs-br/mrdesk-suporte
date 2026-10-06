@@ -1,5 +1,5 @@
 [Unit]
-Description=MrDesk - coleta sessoes do relay (hbbr) para o painel
+Description=MRDesk - coleta sessoes do relay (hbbr) para o painel
 After=postgresql.service rustdesk-hbbr.service
 
 [Service]

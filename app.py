@@ -1,5 +1,5 @@
 # ============================================================
-#  MrDesk Suporte - Backend
+#  MRDesk Suporte - Backend
 #  Sysrs Tecnologia da Informacao
 # ============================================================
 
@@ -28,7 +28,7 @@ TOKEN_MAX_AGE = 60 * 60 * 12  # 12 horas
 # ------------------------------------------------------------
 # ATUALIZACAO AUTOMATICA DO CLIENTE MRDESK
 # ------------------------------------------------------------
-# O client MrDesk (patch em rdgen/generator-windows.yml) manda um POST pra
+# O client MRDesk (patch em rdgen/generator-windows.yml) manda um POST pra
 # /api/version/latest perguntando se ha versao nova.
 #
 # Os exes de atualizacao ficam AQUI MESMO na VM, em UPDATES_DIR, e o Nginx
@@ -52,7 +52,7 @@ TOKEN_MAX_AGE = 60 * 60 * 12  # 12 horas
 # demais consultas a versao sai do cache em memoria.
 #
 # O client compara a versao anunciada com a dele. Se a daqui for MAIOR, ele
-# atualiza (MrDesk: aviso na tela + silencioso; MrDeskPro: so aviso).
+# atualiza (MRDesk: aviso na tela + silencioso; MRDeskPro: so aviso).
 UPDATES_DIR = "/opt/mrdesk-suporte/updates"
 UPDATE_EXES = ("mrdesk.exe", "mrdeskpro.exe")
 UPDATE_CHECK_HOST = "https://mrdesk.sysrs.com.br"
@@ -124,7 +124,7 @@ def _ips_piloto():
     return {str(ip).strip() for ip in ips if str(ip).strip()}
 
 
-# Versao do MrDesk de cada maquina (04/10/2026): o client ja informa a propria
+# Versao do MRDesk de cada maquina (04/10/2026): o client ja informa a propria
 # versao - "ver" (numero) em todo heartbeat e "version" (texto) no sysinfo.
 # Guardamos em devices.versao pra o painel marcar quem esta desatualizado.
 def _versao_do_numero(n):
@@ -193,7 +193,7 @@ def version_status():
 #   - o admin da empresa dele (master) e desativado;
 #   - a senha e trocada (usuarios.senha_alterada posterior a criacao do token).
 # So admin entra no painel (superadmin e admin de empresa); tecnico usa o
-# MrDeskPro.
+# MRDeskPro.
 # Conta da Sysrs (usuario admin da empresa Sysrs): so ela e o superadmin veem
 # os graficos do servidor; so ela tem Licenca MR1, Versao MR1 e "Liberar nova
 # maquina".
@@ -438,8 +438,8 @@ def get_db():
 #   superadmin       : master nulo, admin = 'S'. Um so. Cria e edita so os
 #                      admins de empresa.
 #   admin de empresa : admin = 'S', master = superadmin. Cria e edita so os
-#                      tecnicos dele. Entra no painel e no MrDeskPro.
-#   tecnico          : admin = 'N', master = admin da empresa. So MrDeskPro.
+#                      tecnicos dele. Entra no painel e no MRDeskPro.
+#   tecnico          : admin = 'N', master = admin da empresa. So MRDeskPro.
 # "admin" e "master" NUNCA sao lidos do que a tela manda: saem do usuario
 # logado (quem cria e o master; o superadmin cria admin, o admin cria tecnico).
 # Login = e-mail. Ninguem define a senha de outro: o usuario recebe por e-mail
@@ -453,7 +453,7 @@ MSG_LINK_INVALIDO = "Link inválido ou vencido. Peça um novo em \"Esqueci minha
 
 # Tentativas de login com senha errada, por e-mail + IP (em memoria, por
 # worker): 5 erros em 15 minutos bloqueiam aquele e-mail naquele IP ate a
-# janela passar. Vale pro painel e pro MrDeskPro juntos. (So pelo e-mail nao:
+# janela passar. Vale pro painel e pro MRDeskPro juntos. (So pelo e-mail nao:
 # qualquer um travaria o login de outra pessoa errando a senha de proposito.)
 LIMITE_FALHAS_LOGIN = 5
 JANELA_FALHAS_LOGIN = 15 * 60
@@ -588,15 +588,15 @@ def _enviar_link_senha(usuario_id, motivo, autor=None, ip=None):
     link = f"{PAINEL_URL}/?senha={serializer_link.dumps({'u': usuario_id, 't': momento})}"
 
     if admin == "S":
-        onde = f"Depois, você entra no painel ({PAINEL_URL}) e no MrDeskPro com este e-mail e a senha criada."
+        onde = f"Depois, você entra no painel ({PAINEL_URL}) e no MRDeskPro com este e-mail e a senha criada."
     else:
-        onde = "Depois, você entra no MrDeskPro com este e-mail e a senha criada."
+        onde = "Depois, você entra no MRDeskPro com este e-mail e a senha criada."
     if motivo == "convite":
-        assunto = "MrDesk - crie a sua senha"
-        abertura = "Foi criado um usuário para você no MrDesk. Para criar a sua senha, abra o link abaixo:"
+        assunto = "MRDesk - crie a sua senha"
+        abertura = "Foi criado um usuário para você no MRDesk. Para criar a sua senha, abra o link abaixo:"
     else:
-        assunto = "MrDesk - redefinição de senha"
-        abertura = "Recebemos um pedido para redefinir a sua senha do MrDesk. Para criar uma senha nova, abra o link abaixo:"
+        assunto = "MRDesk - redefinição de senha"
+        abertura = "Recebemos um pedido para redefinir a sua senha do MRDesk. Para criar uma senha nova, abra o link abaixo:"
     texto = (
         f"Olá, {nome}.\n\n{abertura}\n\n{link}\n\n"
         "O link vale por 24 horas e só pode ser usado uma vez.\n"
@@ -615,12 +615,12 @@ def _enviar_link_senha(usuario_id, motivo, autor=None, ip=None):
 def _avisar_senha_alterada(nome, email):
     # Em segundo plano: quem trocou a senha nao espera o servidor de e-mail.
     texto = (
-        f"Olá, {nome}.\n\nA senha do seu usuário no MrDesk ({email}) acabou de ser alterada.\n\n"
+        f"Olá, {nome}.\n\nA senha do seu usuário no MRDesk ({email}) acabou de ser alterada.\n\n"
         "Se foi você, não precisa fazer nada.\n"
         f"Se não foi você, redefina a senha agora em {PAINEL_URL} (\"Esqueci minha senha\") "
         "e avise o administrador.\n"
     )
-    threading.Thread(target=_enviar_email, args=(email, "MrDesk - sua senha foi alterada", texto),
+    threading.Thread(target=_enviar_email, args=(email, "MRDesk - sua senha foi alterada", texto),
                      daemon=True).start()
 
 
@@ -645,7 +645,7 @@ def _usuario_do_link(cur, token):
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json(force=True, silent=True) or {}
-    # Mesmo endereco do login do MrDeskPro (item 24): o RustDesk manda id/uuid.
+    # Mesmo endereco do login do MRDeskPro (item 24): o RustDesk manda id/uuid.
     if data.get("uuid") and data.get("id"):
         return login_pro()
     email = _normalizar_email(data.get("username"))
@@ -677,7 +677,7 @@ def login():
         cur.close()
         conn.close()
         return jsonify({"success": False,
-                        "error": "O painel é só para administradores. Técnicos entram pelo MrDeskPro."}), 403
+                        "error": "O painel é só para administradores. Técnicos entram pelo MRDeskPro."}), 403
 
     cur.execute("UPDATE usuarios SET ultimo_login = NOW() WHERE usuario = %s", (user["usuario"],))
     conn.commit()
@@ -1194,7 +1194,7 @@ def edit_catalogo(catalogo_id):
         cur.execute("UPDATE catalogos SET nome = %s WHERE conta = %s AND catalogo = %s",
                     (nome, request.usuario_id, catalogo_id))
         updated = cur.rowcount
-        # o nome do catalogo aparece como etiqueta no MrDeskPro: as fichas mudaram
+        # o nome do catalogo aparece como etiqueta no MRDeskPro: as fichas mudaram
         cur.execute("UPDATE devices_contas SET atualizado = NOW() WHERE conta = %s AND catalogo = %s",
                     (request.usuario_id, catalogo_id))
         conn.commit()
@@ -1306,8 +1306,8 @@ def list_devices():
 # ------------------------------------------------------------
 # DISPOSITIVOS SEM CONTA - so o superadmin
 # ------------------------------------------------------------
-# Maquinas com o MrDesk instalado que nenhum tecnico acessou ainda (sem linha
-# em devices_contas). Os MrDeskPro cadastrados em Tecnicos autorizados ficam
+# Maquinas com o MRDesk instalado que nenhum tecnico acessou ainda (sem linha
+# em devices_contas). Os MRDeskPro cadastrados em Tecnicos autorizados ficam
 # de fora: sao computadores de tecnicos, nao de clientes.
 @app.route("/api/devices/sem-conta", methods=["GET"])
 @require_auth
@@ -1339,8 +1339,8 @@ def devices_sem_conta():
 
 
 # Superadmin apaga um dispositivo sem conta (ex.: maquina que so executou o
-# MrDesk por alguns segundos e nunca mais apareceu). So vale pra dispositivo
-# que nao e de nenhuma conta, nao e MrDeskPro de tecnico e nao tem auditoria
+# MRDesk por alguns segundos e nunca mais apareceu). So vale pra dispositivo
+# que nao e de nenhuma conta, nao e MRDeskPro de tecnico e nao tem auditoria
 # nem licenca ligada. Se a maquina der sinal de novo, ela volta pra lista.
 @app.route("/api/devices/sem-conta/<device_id>", methods=["DELETE"])
 @require_auth
@@ -1355,7 +1355,7 @@ def excluir_device_sem_conta(device_id):
             return jsonify({"success": False, "error": "Dispositivo não encontrado."}), 404
         for tabela, coluna, motivo in (
             ("devices_contas", "dispositivo", "já pertence a uma conta"),
-            ("tecnicos_autorizados", "dispositivo", "é o MrDeskPro de um técnico"),
+            ("tecnicos_autorizados", "dispositivo", "é o MRDeskPro de um técnico"),
             ("auditoria", "dispositivo", "tem registro de acesso na auditoria"),
             ("licencas", "id_mrdesk", "tem licença MR1 ligada"),
         ):
@@ -1375,8 +1375,8 @@ def excluir_device_sem_conta(device_id):
 # ------------------------------------------------------------
 # PEGAR link de conexao
 # ------------------------------------------------------------
-# Os links de conexao abrem o app do TECNICO (MrDeskPro). O RustDesk registra
-# no Windows um protocolo com o nome do app em minusculas, entao o MrDeskPro
+# Os links de conexao abrem o app do TECNICO (MRDeskPro). O RustDesk registra
+# no Windows um protocolo com o nome do app em minusculas, entao o MRDeskPro
 # responde a "mrdeskpro://" (o "mrdesk://" e do app dos clientes, que so
 # recebe conexao).
 ESQUEMA_CONEXAO = "mrdeskpro"
@@ -1401,7 +1401,7 @@ def get_connect_link(device_id):
 
     if row:
         link = f"{ESQUEMA_CONEXAO}://{modo}/{device_id}"
-        # Item 27: o MrDeskPro (patch 12) usa o nome do cliente como nome da aba
+        # Item 27: o MRDeskPro (patch 12) usa o nome do cliente como nome da aba
         cliente = (row[0] or "").strip()
         if cliente:
             from urllib.parse import quote
@@ -1409,7 +1409,7 @@ def get_connect_link(device_id):
         return jsonify({"success": True, "link": link})
 
     # ID que ainda nao e da conta: permite conectar mesmo assim (botao "Acessar"
-    # da busca), desde que tenha o formato de um ID do MrDesk (7 a 10
+    # da busca), desde que tenha o formato de um ID do MRDesk (7 a 10
     # digitos). Se o acesso der certo, o dispositivo entra na conta sozinho.
     if device_id.isdigit() and 7 <= len(device_id) <= 10:
         return jsonify({"success": True, "link": f"{ESQUEMA_CONEXAO}://{modo}/{device_id}"})
@@ -1631,7 +1631,7 @@ def edit_device(device_id):
 
 # ------------------------------------------------------------
 # LIBERAR NOVA MAQUINA (item 9) - so a conta da Sysrs. Apaga devices.uuid; o
-# proximo contato do MrDesk (heartbeat em segundos) grava o uuid novo.
+# proximo contato do MRDesk (heartbeat em segundos) grava o uuid novo.
 # ------------------------------------------------------------
 @app.route("/api/devices/<device_id>/liberar-maquina", methods=["POST"])
 @require_auth
@@ -1821,7 +1821,7 @@ def _erp_autorizado():
 def licenca_versao():
     if not _erp_autorizado():
         return (jsonify({"success": False, "error": "Nao autorizado"}), 401,
-                {"WWW-Authenticate": 'Basic realm="MrDesk"'})
+                {"WWW-Authenticate": 'Basic realm="MRDesk"'})
 
     data = request.get_json(force=True, silent=True)
     if not isinstance(data, dict):
@@ -1880,7 +1880,7 @@ def licenca_versao():
 # ------------------------------------------------------------
 # MAQUINA DO DISPOSITIVO (item 9) - devices.uuid
 # ------------------------------------------------------------
-# Heartbeat, sysinfo e auditoria nao tem senha (desenho do RustDesk). O MrDesk
+# Heartbeat, sysinfo e auditoria nao tem senha (desenho do RustDesk). O MRDesk
 # manda em todos o "uuid" da maquina (codigo da instalacao do Windows). O
 # primeiro contato grava em devices.uuid; dai em diante aviso com uuid
 # diferente (ou sem uuid) e recusado e vai pro log - assim ninguem grava
@@ -1923,7 +1923,7 @@ def _maquina_confere(cur, device_id, uuid_env, origem):
 
 
 # ------------------------------------------------------------
-# HEARTBEAT / SYSINFO - recebidos diretamente do cliente MrDesk
+# HEARTBEAT / SYSINFO - recebidos diretamente do cliente MRDesk
 # (nao passam pelo hbbs, o cliente manda direto pro "Servidor API"
 # configurado nele). Sem autenticacao, por desenho do proprio
 # RustDesk - confirmado por teste real em 24/09/2026.
@@ -1935,9 +1935,9 @@ def heartbeat():
     if not device_id:
         return jsonify({})
 
-    # Item 16: o MrDesk com o patch manda ha quantos segundos o teclado/mouse
+    # Item 16: o MRDesk com o patch manda ha quantos segundos o teclado/mouse
     # estao parados ("mrdesk_ocioso"). Guardamos a hora da ultima atividade.
-    # Sem o campo (MrDesk sem o patch), ultima_atividade nao muda.
+    # Sem o campo (MRDesk sem o patch), ultima_atividade nao muda.
     ocioso = data.get("mrdesk_ocioso")
     try:
         ocioso = int(ocioso) if ocioso is not None else None
@@ -1959,7 +1959,7 @@ def heartbeat():
     if cur.fetchone():
         # Item 34: o heartbeat traz as conexoes ativas ("conns" = conn_id; sem o
         # campo = nenhuma). Acesso aberto que nao esta mais na lista terminou sem
-        # aviso de fechamento (MrDesk morto, queda de energia...): fecha agora.
+        # aviso de fechamento (MRDesk morto, queda de energia...): fecha agora.
         # So mexe em acesso que ja passou do login (origem preenchida) e aberto
         # ha mais de 1 minuto - quem esta na tela de senha nunca e fechado aqui.
         ativos = data.get("conns")
@@ -2009,7 +2009,7 @@ def sysinfo():
     if not device_id:
         return jsonify({})
 
-    # O MrDesk ja manda isso no sysinfo (codigo do RustDesk, get_sysinfo):
+    # O MRDesk ja manda isso no sysinfo (codigo do RustDesk, get_sysinfo):
     # os ("windows / Windows 10 Pro - 10.0.19045"), memory ("8GB"),
     # cpu ("Intel..., 1.8GHz, 8/4 cores") e hostname. Colunas criadas em 01/10.
     def _txt(valor, tamanho):
@@ -2073,10 +2073,10 @@ def sysinfo():
 # ------------------------------------------------------------
 # TECNICOS AUTORIZADOS (item 6A) - so o admin gerencia
 # ------------------------------------------------------------
-# Cada linha = um MrDeskPro (ID) de um tecnico (usuario do painel). O MrDesk
-# do cliente so aceita conexao de MrDeskPro cadastrado aqui, com a linha
+# Cada linha = um MRDeskPro (ID) de um tecnico (usuario do painel). O MRDesk
+# do cliente so aceita conexao de MRDeskPro cadastrado aqui, com a linha
 # ativa E o usuario dono ativo. Nao se exclui: desativa.
-# O ID precisa existir em devices (fk_tecnico_device) - o MrDeskPro entra em
+# O ID precisa existir em devices (fk_tecnico_device) - o MRDeskPro entra em
 # devices sozinho pelo heartbeat, basta ter ficado on-line uma vez.
 TAMANHO_ID_DISPOSITIVO = 20  # padrao: tudo que representa device e varchar(20)
 
@@ -2087,7 +2087,7 @@ def _normalizar_id(valor):
 
 
 # Item 41: so o admin de empresa gerencia (o superadmin nao), e so os
-# MrDeskPro dele mesmo e dos tecnicos dele.
+# MRDeskPro dele mesmo e dos tecnicos dele.
 def _usuario_da_conta(cur, usuario_id):
     # True se o usuario e o admin logado ou um tecnico dele.
     cur.execute("SELECT 1 FROM usuarios WHERE usuario = %s AND (usuario = %s OR master = %s)",
@@ -2139,7 +2139,7 @@ def _dados_tecnico(data):
     except (TypeError, ValueError):
         usuario = None
     if not dispositivo or usuario is None:
-        return None, "ID do MrDeskPro e técnico são obrigatórios"
+        return None, "ID do MRDeskPro e técnico são obrigatórios"
     if len(dispositivo) > TAMANHO_ID_DISPOSITIVO:
         return None, f"O ID tem no máximo {TAMANHO_ID_DISPOSITIVO} caracteres"
     if descricao and len(descricao) > 100:
@@ -2150,7 +2150,7 @@ def _dados_tecnico(data):
 def _erro_integridade_tecnico(e):
     constraint = getattr(e.diag, "constraint_name", None)
     if constraint == "fk_tecnico_device":
-        return "ID não encontrado nos dispositivos: o MrDeskPro precisa ter ficado on-line ao menos uma vez."
+        return "ID não encontrado nos dispositivos: o MRDeskPro precisa ter ficado on-line ao menos uma vez."
     if constraint == "fk_tecnico_usuario":
         return "Técnico (usuário) não encontrado."
     if constraint == "pk_tecnicos_autorizados":
@@ -2228,23 +2228,23 @@ def edit_tecnico(dispositivo_original):
 
 
 # ------------------------------------------------------------
-# VERIFICAR TECNICO - consultado pelo MrDesk do cliente (sem login)
+# VERIFICAR TECNICO - consultado pelo MRDesk do cliente (sem login)
 # ------------------------------------------------------------
-# O MrDesk (patch no RustDesk) pergunta, antes de validar a senha, se o
-# MrDeskPro que esta conectando e autorizado:
-#   POST {"id": <ID do MrDesk>, "peer": <ID de quem conecta>}
+# O MRDesk (patch no RustDesk) pergunta, antes de validar a senha, se o
+# MRDeskPro que esta conectando e autorizado:
+#   POST {"id": <ID do MRDesk>, "peer": <ID de quem conecta>}
 #   -> {"autorizado": true|false}
 # Responde so sim/nao pro ID perguntado, nunca a lista. Limite de consultas
 # por IP (em memoria, por worker do gunicorn) pra dificultar varredura.
-# Qualquer resposta que nao seja HTTP 200 com {"autorizado": ...} o MrDesk
+# Qualquer resposta que nao seja HTTP 200 com {"autorizado": ...} o MRDesk
 # trata como "servidor fora" (usa o cache de 72h, se tiver).
 # Item 6B (cinco senhas permanentes): a conta do tecnico tem um numero de
-# acesso (usuarios.senha_permanente do tecnico, 1 a 5; 1 = reservada, Sysrs) e o MrDesk
-# confere so a senha permanente daquele numero. O MrDesk 1.4.11+ manda
+# acesso (usuarios.senha_permanente do tecnico, 1 a 5; 1 = reservada, Sysrs) e o MRDesk
+# confere so a senha permanente daquele numero. O MRDesk 1.4.11+ manda
 # "senhas": 5 nas duas consultas e recebe o numero:
 #   verificar -> {"autorizado": true, "acesso": N}
-#   lista     -> codigos SHA-256 de "<ID do MrDesk>:<ID do MrDeskPro>:<N>"
-# MrDesk mais antigo (sem "senhas") so conhece a senha 1: pra ele, tecnico de
+#   lista     -> codigos SHA-256 de "<ID do MRDesk>:<ID do MRDeskPro>:<N>"
+# MRDesk mais antigo (sem "senhas") so conhece a senha 1: pra ele, tecnico de
 # acesso diferente de 1 e "nao autorizado" e fica fora da lista.
 LIMITE_VERIFICACOES_POR_MINUTO = 60
 # numero da senha permanente do proprio usuario (tecnico ou admin de empresa)
@@ -2281,7 +2281,7 @@ def _excedeu_limite_verificacao(ip):
 def verificar_tecnico():
     ip = request.headers.get("X-Real-IP") or request.remote_addr or "?"
     if _excedeu_limite_verificacao(ip):
-        # sem a chave "autorizado": o MrDesk trata como "sem resposta" (usa o cache),
+        # sem a chave "autorizado": o MRDesk trata como "sem resposta" (usa o cache),
         # e nao como bloqueio
         return jsonify({"motivo": "limite"}), 429
 
@@ -2306,7 +2306,7 @@ def verificar_tecnico():
         return jsonify({"autorizado": False})
     acesso, conta, limite = r
     if acesso != 1 and not _mrdesk_cinco_senhas(data):
-        # MrDesk anterior a 1.4.11 so conhece a senha 1: liberar deixaria o
+        # MRDesk anterior a 1.4.11 so conhece a senha 1: liberar deixaria o
         # tecnico de outra conta entrar com a senha da Sysrs.
         cur.close()
         conn.close()
@@ -2316,7 +2316,7 @@ def verificar_tecnico():
     cur.close()
     conn.close()
     if cheio:
-        # "mensagem": o MrDesk 1.4.11+ mostra o texto ao tecnico; os anteriores
+        # "mensagem": o MRDesk 1.4.11+ mostra o texto ao tecnico; os anteriores
         # mostram a mensagem padrao de conexao nao permitida.
         return jsonify({"autorizado": False,
                         "mensagem": f"Limite de acessos simultâneos da sua empresa atingido ({limite}). "
@@ -2410,10 +2410,10 @@ def acessos_abertos():
 # ------------------------------------------------------------
 # LISTA DE TECNICOS PRO CACHE DO MRDESK (item 23) - sem login
 # ------------------------------------------------------------
-# O MrDesk baixa 1x por dia (e a cada acesso) a lista de tecnicos autorizados e
+# O MRDesk baixa 1x por dia (e a cada acesso) a lista de tecnicos autorizados e
 # usa essa lista quando o servidor nao responde (validade 15 dias).
-#   POST {"id": <ID do MrDesk>} -> {"lista": [codigos], "validade_dias": 15}
-# Cada codigo = SHA-256 de "<ID do MrDesk>:<ID do MrDeskPro>" (hex). Nao revela
+#   POST {"id": <ID do MRDesk>} -> {"lista": [codigos], "validade_dias": 15}
+# Cada codigo = SHA-256 de "<ID do MRDesk>:<ID do MRDeskPro>" (hex). Nao revela
 # os IDs dos tecnicos e so serve naquele cliente. Mesmo limite por IP da
 # verificacao.
 VALIDADE_LISTA_DIAS = 15
@@ -2449,15 +2449,15 @@ def lista_tecnicos_cache():
 # ------------------------------------------------------------
 # LOGIN E CATALOGO DE ENDERECOS DO MRDESKPRO (item 24)
 # ------------------------------------------------------------
-# O MrDeskPro (login liberado so nele) usa o "catalogo de enderecos" nativo do
+# O MRDeskPro (login liberado so nele) usa o "catalogo de enderecos" nativo do
 # RustDesk no modo simples ("legacy"): /api/login, /api/currentUser,
 # /api/logout e GET /api/ab. /api/ab/personal NAO existe (404) - e assim que o
-# MrDeskPro sabe que deve usar o modo simples.
-# - Login com e-mail/senha (item 41; o campo "usuario" do MrDeskPro recebe o
+# MRDeskPro sabe que deve usar o modo simples.
+# - Login com e-mail/senha (item 41; o campo "usuario" do MRDeskPro recebe o
 #   e-mail), usuario ativo, admin da empresa dele ativo, e SO a partir de um
-#   MrDeskPro cadastrado em Tecnicos autorizados pra esse mesmo usuario.
+#   MRDeskPro cadastrado em Tecnicos autorizados pra esse mesmo usuario.
 # - Sessao vale 30 dias (depois, entrar de novo). Usuario, admin da empresa
-#   ou MrDeskPro desativado, ou senha trocada -> a sessao cai na proxima
+#   ou MRDeskPro desativado, ou senha trocada -> a sessao cai na proxima
 #   conferencia.
 # - Catalogo (item 41): os dispositivos ativos da conta do tecnico; o tecnico
 #   pode renomear (apelido) e trocar a etiqueta (catalogo); sem senha/hash (o
@@ -2481,7 +2481,7 @@ def _excedeu_limite_login_pro(ip):
 
 
 def _usuario_pro_valido(cur, usuario_id, dispositivo, emitido=None):
-    # usuario ativo + admin da empresa dele ativo + esse MrDeskPro ativo e dele
+    # usuario ativo + admin da empresa dele ativo + esse MRDeskPro ativo e dele
     # + (se "emitido" vier) senha nao trocada depois da sessao criada.
     # Devolve (nome, admin, email) ou None.
     cur.execute(
@@ -2503,7 +2503,7 @@ def _payload_usuario_pro(nome, admin, email):
 
 
 def _sessao_pro():
-    # Le o "Bearer" do MrDeskPro. Devolve (usuario_id, dispositivo, linha) ou None.
+    # Le o "Bearer" do MRDeskPro. Devolve (usuario_id, dispositivo, linha) ou None.
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if not token:
         return None
@@ -2527,7 +2527,7 @@ def login_options_pro():
 
 
 def login_pro():
-    # Chamado pelo /api/login do painel quando o pedido vem do MrDeskPro
+    # Chamado pelo /api/login do painel quando o pedido vem do MRDeskPro
     # (o RustDesk manda "id" e "uuid" junto com usuario/senha).
     ip = request.headers.get("X-Real-IP") or request.remote_addr or "?"
     if _excedeu_limite_login_pro(ip):
@@ -2563,9 +2563,9 @@ def login_pro():
         return jsonify({"error": "E-mail ou senha inválidos. O login é o seu e-mail."}), 401
     _limpar_falhas_login(nome)
     if not autorizado:
-        print(f"login MrDeskPro recusado: usuario {nome} a partir de {dispositivo} (nao autorizado)",
+        print(f"login MRDeskPro recusado: usuario {nome} a partir de {dispositivo} (nao autorizado)",
               file=sys.stderr, flush=True)
-        return jsonify({"error": "Este MrDeskPro não está autorizado para este usuário."}), 401
+        return jsonify({"error": "Este MRDeskPro não está autorizado para este usuário."}), 401
 
     token = serializer_pro.dumps({"u": user["usuario"], "d": dispositivo})
     return jsonify({
@@ -2602,7 +2602,7 @@ def _conta_do_usuario(cur, usuario_id):
 
 
 def _fichas_pro(cur, conta):
-    # Dispositivos ativos da conta, como o MrDeskPro mostra. Cliente nulo: o
+    # Dispositivos ativos da conta, como o MRDeskPro mostra. Cliente nulo: o
     # card mostra so o apelido (vai no lugar do cliente e a direita fica vazio).
     cur.execute(
         "SELECT d.id, dc.cliente, dc.apelido, d.sistema, c.nome AS catalogo_nome "
@@ -2627,7 +2627,7 @@ def _fichas_pro(cur, conta):
     return fichas
 
 
-# O que o MrDeskPro precisa ter igual ao servidor pra poder alterar uma ficha:
+# O que o MRDeskPro precisa ter igual ao servidor pra poder alterar uma ficha:
 # cliente, apelido e nome do catalogo, como foram mandados pra ele.
 def _versao_ficha_pro(cliente, apelido, catalogo_nome):
     return [(cliente or "").strip(), (apelido or "").strip(), (catalogo_nome or "").strip()]
@@ -2647,7 +2647,7 @@ def catalogo_pro():
     # etiquetas = todos os catalogos da conta (inclusive os vazios, pra poder mover pra eles)
     cur.execute("SELECT nome FROM catalogos WHERE conta = %s ORDER BY catalogo", (conta,))
     tags = [(r[0] or "").strip() for r in cur.fetchall() if (r[0] or "").strip()]
-    # este MrDeskPro esta com o catalogo em dia a partir de agora: guarda a copia
+    # este MRDeskPro esta com o catalogo em dia a partir de agora: guarda a copia
     # que ele passa a ter (versao_catalogo_local), pra saber depois o que ele alterou
     copia = {
         f["id"]: {
@@ -2677,7 +2677,7 @@ def catalogo_pro():
     return jsonify({"data": _json.dumps(dados, ensure_ascii=False)})
 
 
-# O MrDeskPro manda o catalogo INTEIRO de volta em varias situacoes: quando o
+# O MRDeskPro manda o catalogo INTEIRO de volta em varias situacoes: quando o
 # tecnico renomeia um dispositivo ou troca a etiqueta, e tambem sozinho, a cada
 # conexao com senha lembrada (manda o resumo da senha). Recusar com erro fazia
 # aparecer "Nao foi possivel sincronizar o diretorio com o servidor" (02/10),
@@ -2687,15 +2687,15 @@ def catalogo_pro():
 #   - renomear ("alias")  -> grava no apelido da ficha da conta
 #   - trocar a etiqueta   -> move pro catalogo com aquele nome (da conta)
 # Incluir, excluir e o resto do conteudo continuam ignorados.
-# O MrDeskPro reenvia o catalogo inteiro sozinho, e a copia dele pode estar
+# O MRDeskPro reenvia o catalogo inteiro sozinho, e a copia dele pode estar
 # velha. Pra saber o que o tecnico alterou de verdade, o servidor guarda a
-# copia que cada MrDeskPro tem (tecnicos_autorizados.versao_catalogo_local):
+# copia que cada MRDeskPro tem (tecnicos_autorizados.versao_catalogo_local):
 # por dispositivo, a ficha como foi mandada pra ele ("v": cliente, apelido,
 # catalogo) e o nome/etiquetas que ele mandou por ultimo ("a", "t").
 #   - nome ou etiquetas iguais aos da copia  -> so reenvio, ignora
 #   - diferentes, e a ficha continua como ele recebeu -> grava
 #   - diferentes, mas a ficha mudou no painel depois que ele leu -> recusa e
-#     responde com erro (o MrDeskPro mostra a mensagem no lugar do "Sucesso")
+#     responde com erro (o MRDeskPro mostra a mensagem no lugar do "Sucesso")
 MSG_CATALOGO_VELHO = ("A lista de dispositivos está desatualizada. "
                       "Atualize a lista e repita a alteração.")
 
@@ -2760,7 +2760,7 @@ def catalogo_pro_gravar():
             tags = peer.get("tags")
             tags = [str(t).strip() for t in tags] if isinstance(tags, list) else None
 
-            # sem copia desta ficha (MrDeskPro que ainda nao releu o catalogo, ou
+            # sem copia desta ficha (MRDeskPro que ainda nao releu o catalogo, ou
             # ficha que entrou depois): compara com o que o servidor mandaria
             alias_antes = item.get("a", "") if item else ""
             tags_antes = item.get("t", []) if item else ([versao_atual[2]] if versao_atual[2] else [])
@@ -2770,7 +2770,7 @@ def catalogo_pro_gravar():
             if not mudou_nome and not mudou_tags:
                 continue  # so reenvio
 
-            # A ficha continua como este MrDeskPro recebeu?
+            # A ficha continua como este MRDeskPro recebeu?
             if not item or item.get("v") != versao_atual:
                 recusou = True
                 continue
@@ -2805,19 +2805,19 @@ def catalogo_pro_gravar():
         cur.close()
         conn.close()
     if recusou:
-        # 200 com "error": o MrDeskPro mostra o texto no lugar do "Sucesso"
+        # 200 com "error": o MRDeskPro mostra o texto no lugar do "Sucesso"
         return jsonify({"error": MSG_CATALOGO_VELHO})
     return ("", 200)
 
 
-# Aba "Grupo" do MrDeskPro: depois do login ele pede grupos de dispositivos,
+# Aba "Grupo" do MRDeskPro: depois do login ele pede grupos de dispositivos,
 # usuarios e dispositivos acessiveis (recurso do servidor Pro do RustDesk).
-# Sem estas rotas o MrDeskPro mostrava "Nao foi possivel atualizar o grupo:
+# Sem estas rotas o MRDeskPro mostrava "Nao foi possivel atualizar o grupo:
 # HTTP 404". Decisao do Celso (01/10): os catalogos aparecem como grupos de
 # dispositivos; os dispositivos sao os mesmos do catalogo de enderecos (item
 # 41: os ativos da conta do tecnico). Usuarios: vazio.
 # Paginacao do RustDesk: ?current=N&pageSize=100 -> {"total", "data"}.
-# Sem sessao valida: 401 (o MrDeskPro sai do login).
+# Sem sessao valida: 401 (o MRDeskPro sai do login).
 def _pagina_pro(itens):
     try:
         atual = max(int(request.args.get("current", 1)), 1)
@@ -2884,12 +2884,12 @@ def dispositivos_pro():
 # conn_id, session_id, nonce. Guardamos 1 linha por acesso (nao por
 # evento), com chave natural (dispositivo, acesso) - item 13.
 #
-# acesso (BIGINT) = segundo em que o servico do MrDesk iniciou (10 digitos)
+# acesso (BIGINT) = segundo em que o servico do MRDesk iniciou (10 digitos)
 # * 1.000.000 + conn_id (6 digitos). O conn_id sozinho recomeca do 1 quando o
 # servico reinicia, por isso nao serve de chave.
-#   - MrDesk 1.4.10+ (patch 13 do rdgen) manda o numero pronto em
+#   - MRDesk 1.4.10+ (patch 13 do rdgen) manda o numero pronto em
 #     "mrdesk_acesso", igual nos 3 avisos: junta direto pela chave.
-#   - MrDesk antigo (sem "mrdesk_acesso"): o servidor gera o numero na
+#   - MRDesk antigo (sem "mrdesk_acesso"): o servidor gera o numero na
 #     ABERTURA (hora da chegada * 1.000.000 + conn_id) e sempre cria linha
 #     nova. Login e fechamento completam a linha mais recente ainda aberta
 #     (fim vazio) desse dispositivo com o mesmo conn_id (6 ultimos digitos).
@@ -2943,7 +2943,7 @@ def audit_conn():
     except (TypeError, ValueError):
         return ("", 200)
 
-    # Numero do acesso mandado pelo MrDesk 1.4.10+ (patch 13). Antigos nao mandam.
+    # Numero do acesso mandado pelo MRDesk 1.4.10+ (patch 13). Antigos nao mandam.
     acesso = data.get("mrdesk_acesso")
     try:
         acesso = int(acesso) if acesso is not None else None
@@ -2953,7 +2953,7 @@ def audit_conn():
         acesso = None
 
     action = data.get("action")
-    # Controle de acesso (item 6A): o MrDesk com o patch manda "permissao"
+    # Controle de acesso (item 6A): o MRDesk com o patch manda "permissao"
     # (P = permitida, B = bloqueada, F = falha na verificacao). Clientes sem o
     # patch nao mandam: fica o default da coluna ('P' - nao havia controle).
     permissao = data.get("permissao")
@@ -2971,7 +2971,7 @@ def audit_conn():
             nome = peer[1] if len(peer) > 1 else None
         tipo = data.get("type")
 
-    # Item 33: como o acesso foi autorizado (o MrDesk manda "primary_auth" no
+    # Item 33: como o acesso foi autorizado (o MRDesk manda "primary_auth" no
     # aviso de login): 1 aceite na tela, 2 senha temporaria, 3 senha permanente,
     # 4 troca de lado.
     autenticacao = data.get("primary_auth")
@@ -3004,7 +3004,7 @@ def audit_conn():
             conn.commit()
             return ("", 200)
 
-        # Item 41: no aviso de login, a conta do tecnico (dono do MrDeskPro que
+        # Item 41: no aviso de login, a conta do tecnico (dono do MRDeskPro que
         # conectou) fica gravada no acesso. E, se o acesso foi permitido, o
         # dispositivo entra na conta - e assim que a ligacao nasce (primeiro
         # acesso que deu certo): apelido = nome do computador, sem cliente, no
@@ -3029,7 +3029,7 @@ def audit_conn():
                     dict(p, novos=CATALOGO_NOVOS)
                 )
         if acesso is not None:
-            # MrDesk 1.4.10+: o numero ja identifica o acesso.
+            # MRDesk 1.4.10+: o numero ja identifica o acesso.
             cur.execute(
                 _AUDIT_INSERT.format(acesso="%(acesso)s")
                 + " ON CONFLICT (dispositivo, acesso) DO UPDATE SET " + _AUDIT_SET
@@ -3037,7 +3037,7 @@ def audit_conn():
                 p
             )
         elif action == "new":
-            # MrDesk antigo, abertura: reenvio da mesma abertura reusa a linha.
+            # MRDesk antigo, abertura: reenvio da mesma abertura reusa a linha.
             cur.execute(
                 "SELECT acesso FROM auditoria WHERE dispositivo = %(dispositivo)s "
                 "AND acesso %% %(fator)s = %(conexao)s AND sessao = %(sessao)s AND fim IS NULL "
@@ -3061,7 +3061,7 @@ def audit_conn():
                     p
                 )
         else:
-            # MrDesk antigo, login/fechamento: completa a linha aberta mais recente.
+            # MRDesk antigo, login/fechamento: completa a linha aberta mais recente.
             cur.execute(
                 "SELECT acesso FROM auditoria WHERE dispositivo = %(dispositivo)s "
                 "AND acesso %% %(fator)s = %(conexao)s AND fim IS NULL "

@@ -1,5 +1,5 @@
 # ============================================================
-#  MrDesk Suporte - Configuracao (MODELO)
+#  MRDesk Suporte - Configuracao (MODELO)
 # ============================================================
 # Copie este arquivo para "config.py" na VM e preencha os valores.
 # O config.py real tem senhas e NAO vai para o repositorio.
@@ -28,7 +28,7 @@ SMTP_PORT = 587
 SMTP_SEGURANCA = "starttls"      # "starttls" (porta 587) ou "ssl" (porta 465)
 SMTP_USUARIO = "..."             # conta que envia
 SMTP_SENHA = "..."
-SMTP_REMETENTE = "MrDesk <naoresponda@sysrs.com.br>"
+SMTP_REMETENTE = "MRDesk <naoresponda@sysrs.com.br>"
 
 
 # Publicacao piloto da atualizacao automatica: enquanto houver IP aqui, so as

@@ -181,7 +181,7 @@
   .acoes-linha { text-align: right; white-space: nowrap; position: relative; }
   .col-acoes-estreita { width: 1%; } /* so o espaco dos botoes */
   td.col-sistema { color: var(--texto-secundario); font-size: 13px; cursor: help; }
-  /* MrDesk desatualizado: coluna estreita so com o icone (o titulo da coluna e o proprio icone) */
+  /* MRDesk desatualizado: coluna estreita so com o icone (o titulo da coluna e o proprio icone) */
   th.col-desatualizado, td.col-desatualizado { width: 30px; padding-left: 4px; padding-right: 4px; text-align: center; }
   th.col-desatualizado { cursor: help; color: var(--texto-secundario); }
   th.col-desatualizado.tem-desatualizado, td.col-desatualizado { color: #d97706; }

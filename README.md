@@ -1,6 +1,6 @@
-# MrDesk Suporte
+# MRDesk Suporte
 
-Backend e painel web do MrDesk (RustDesk white-label da Sysrs Tecnologia da Informação).
+Backend e painel web do MRDesk (RustDesk white-label da Sysrs Tecnologia da Informação).
 Roda na VM Oracle em `/opt/mrdesk-suporte`, atrás do Nginx, em `https://mrdesk.sysrs.com.br`.
 
 ## Estrutura

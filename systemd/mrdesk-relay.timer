@@ -1,5 +1,5 @@
 [Unit]
-Description=MrDesk - coleta sessoes do relay a cada 5 minutos
+Description=MRDesk - coleta sessoes do relay a cada 5 minutos
 
 [Timer]
 OnBootSec=2min

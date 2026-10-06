@@ -1,5 +1,5 @@
 # ============================================================
-#  MrDesk Suporte - Coletor de sessoes do relay (hbbr)
+#  MRDesk Suporte - Coletor de sessoes do relay (hbbr)
 #  Sysrs Tecnologia da Informacao
 # ============================================================
 #
@@ -16,7 +16,7 @@
 #   Relayrequest <codigo> from [...] got paired     <- segundo lado chegou e
 #                                                      os dois foram ligados
 # Contamos SO as "got paired" (sessoes que realmente passaram pelo relay) E
-# com codigo no formato UUID (o que o MrDesk usa). Robos que varrem a internet
+# com codigo no formato UUID (o que o MRDesk usa). Robos que varrem a internet
 # as vezes chegam a "got paired" (mandam 2 pedidos com o mesmo codigo), mas
 # com codigos em outro formato; desde que o hbbr passou a exigir a chave
 # (28/09), eles nem chegam la.

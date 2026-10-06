@@ -133,7 +133,7 @@ function versaoAbaixoDaMinima(versao) {
   return compararVersoes(versao, minima) < 0;
 }
 
-// Coluna Sistema (01/10): o MrDesk manda "windows / Windows 10 Pro - 10.0.19045";
+// Coluna Sistema (01/10): o MRDesk manda "windows / Windows 10 Pro - 10.0.19045";
 // na coluna mostra so "Windows 10 Pro"; o hint traz o resto.
 function sistemaCurto(sistema) {
   if (!sistema) return "—";
@@ -144,7 +144,7 @@ function sistemaCurto(sistema) {
   if (traco > 0) s = s.slice(0, traco);
   return s.trim() || sistema;
 }
-// MrDesk desatualizado (04/10): o servidor manda a versão de cada máquina e
+// MRDesk desatualizado (04/10): o servidor manda a versão de cada máquina e
 // a versão publicada; máquina com versão anterior ganha um ícone antes do
 // sistema, com a versão instalada na dica. O nome da coluna mostra quantas são.
 let versaoPublicada = null;
@@ -152,7 +152,7 @@ const ICONE_DESATUALIZADO = '<svg class="icon" viewBox="0 0 24 24"><path d="M21 
 function iconeDesatualizado(d) {
   if (!d.desatualizado) return "";
   // sem versão = máquina que não deu sinal desde que o painel passou a guardar a versão
-  const dica = (d.versao ? `MrDesk desatualizado: versão ${d.versao} instalada` : "MrDesk desatualizado: versão não informada, a máquina ainda não deu sinal")
+  const dica = (d.versao ? `MRDesk desatualizado: versão ${d.versao} instalada` : "MRDesk desatualizado: versão não informada, a máquina ainda não deu sinal")
     + (versaoPublicada ? ` (atual: ${versaoPublicada})` : "");
   return `<span title="${escapeHtml(dica)}">${ICONE_DESATUALIZADO}</span>`;
 }
@@ -160,19 +160,19 @@ function atualizarDicaDeDesatualizados() {
   const th = document.getElementById("th-desatualizado");
   const n = dispositivos.filter(d => d.desatualizado).length;
   th.classList.toggle("tem-desatualizado", n > 0);
-  th.title = (n === 0 ? "Nenhum dispositivo com MrDesk desatualizado"
-    : n === 1 ? "1 dispositivo com MrDesk desatualizado" : `${n} dispositivos com MrDesk desatualizado`)
+  th.title = (n === 0 ? "Nenhum dispositivo com MRDesk desatualizado"
+    : n === 1 ? "1 dispositivo com MRDesk desatualizado" : `${n} dispositivos com MRDesk desatualizado`)
     + (versaoPublicada ? ` (versão atual: ${versaoPublicada})` : "");
 }
 
 function hintSistema(d) {
   const linhas = [];
   if (d.sistema) linhas.push(`Sistema: ${d.sistema}`);
-  if (d.versao) linhas.push(`MrDesk: ${d.versao}`);
+  if (d.versao) linhas.push(`MRDesk: ${d.versao}`);
   if (d.memoria) linhas.push(`Memória: ${d.memoria}`);
   if (d.processador) linhas.push(`Processador: ${d.processador}`);
   if (d.computador) linhas.push(`Computador: ${d.computador}`);
-  return linhas.length ? linhas.join("\n") : "Sem informações (chegam no próximo registro do MrDesk)";
+  return linhas.length ? linhas.join("\n") : "Sem informações (chegam no próximo registro do MRDesk)";
 }
 
 function mostrarApp() {
@@ -312,7 +312,7 @@ const codigoLinkSenha = new URLSearchParams(location.search).get("senha");
 if (codigoLinkSenha) {
   abrirDefinirSenha();
 } else if (new URLSearchParams(location.search).has("esqueci")) {
-  // Veio do link "Esqueci minha senha" do MrDeskPro: abre direto na página de pedir o link
+  // Veio do link "Esqueci minha senha" do MRDeskPro: abre direto na página de pedir o link
   mostrarLogin();
   mostrarCartaoLogin("form-esqueci");
 } else if (token) { mostrarApp(); } else { mostrarLogin(); }
@@ -371,7 +371,7 @@ document.getElementById("form-definir-senha").addEventListener("submit", async (
       document.getElementById("texto-definir-senha").textContent = "";
       msgLogin("msg-definir-senha", data.admin
         ? "Senha criada. Entre no painel com o seu e-mail e a senha nova."
-        : "Senha criada. Entre no MrDeskPro com o seu e-mail e a senha nova.", "ok");
+        : "Senha criada. Entre no MRDeskPro com o seu e-mail e a senha nova.", "ok");
       document.getElementById("link-definir-voltar").style.display = data.admin ? "block" : "none";
       if (data.admin && data.email) localStorage.setItem("mrdesk_ultimo_usuario", data.email);
     } else {
@@ -1286,12 +1286,12 @@ document.getElementById("menu-flutuante").addEventListener("click", async (e) =>
   }
 
   // Item 9: Windows reinstalado (mesmo ID, máquina nova) - apaga a máquina
-  // registrada; o próximo contato do MrDesk grava a nova.
+  // registrada; o próximo contato do MRDesk grava a nova.
   if (acao === "liberar-maquina") {
     const dev = dispositivos.find(d => d.id === id);
     if (confirm(`Liberar nova máquina para ${rotuloDispositivo(dev)}?\n\n` +
         "Use quando o Windows desse computador foi reinstalado: até liberar, ele fica off-line no painel e não gera auditoria. " +
-        "O próximo contato do MrDesk registra a máquina nova.")) {
+        "O próximo contato do MRDesk registra a máquina nova.")) {
       try {
         const resp = await fetch(`${API}/devices/${id}/liberar-maquina`, { method: "POST", headers: headersAuth() });
         const data = await resp.json();
@@ -1461,7 +1461,7 @@ let idParaAuditoria = null;
 
 // Coluna "permissao" da auditoria (controle de acesso - item 6A)
 const TEXTO_PERMISSAO = { P: "Permitida", B: "Bloqueada", F: "Falha na verificação" };
-// Coluna "autenticacao" (item 33): como o acesso foi autorizado no MrDesk
+// Coluna "autenticacao" (item 33): como o acesso foi autorizado no MRDesk
 const TEXTO_AUTENTICACAO = { 1: "Aceite na tela", 2: "Senha temporária", 3: "Senha permanente", 4: "Troca de lado" };
 
 function formatarDataHora(isoString) {
@@ -1724,7 +1724,7 @@ function renderizarTabelaUsuarios() {
       <th>Nome</th>
       ${usuarioSuper ? "<th>Empresa</th>" : ""}
       <th>E-mail (login)</th>
-      <th class="centralizado" title="Número da senha permanente que este usuário usa no MrDesk">Senha permanente</th>
+      <th class="centralizado" title="Número da senha permanente que este usuário usa no MRDesk">Senha permanente</th>
       ${usuarioSuper ? '<th class="centralizado" title="Acessos simultâneos: quantas máquinas a empresa pode acessar ao mesmo tempo">Acessos</th>' : ""}
       <th class="centralizado">Situação</th>
       <th class="centralizado">Último login</th>
@@ -1792,7 +1792,7 @@ function abrirModalUsuario(u) {
 
   // Tipo e master são definidos pelo servidor a partir de quem está logado;
   // aqui aparecem só como informação (desabilitados).
-  const tipo = usuarioSuper ? "Administrador de empresa" : "Técnico (só MrDeskPro)";
+  const tipo = usuarioSuper ? "Administrador de empresa" : "Técnico (só MRDeskPro)";
   document.getElementById("usuario-tipo").value = tipo;
   document.getElementById("usuario-master").value = nomeMasterUsuarios;
   document.getElementById("campos-usuario-empresa").style.display = usuarioSuper ? "block" : "none";
@@ -1815,10 +1815,10 @@ function abrirModalUsuario(u) {
   document.getElementById("dica-usuario-senha-permanente").textContent = contaSysrs
     ? "A Senha 1 é fixa da Sysrs e não pode ser alterada."
     : usuarioSuper
-    ? "Senha que o administrador usa no MrDesk. Os técnicos da empresa usam desta até a Senha 5. A Senha 1 é reservada para a Sysrs."
+    ? "Senha que o administrador usa no MRDesk. Os técnicos da empresa usam desta até a Senha 5. A Senha 1 é reservada para a Sysrs."
     : (senhaMinimaUsuarios > 1
-        ? `Senha que o técnico usa no MrDesk (da Senha ${senhaMinimaUsuarios} à Senha 5).`
-        : "Senha que o técnico usa no MrDesk.");
+        ? `Senha que o técnico usa no MRDesk (da Senha ${senhaMinimaUsuarios} à Senha 5).`
+        : "Senha que o técnico usa no MRDesk.");
 
   const email = document.getElementById("usuario-email");
   const dica = document.getElementById("dica-usuario-email");
@@ -1945,7 +1945,7 @@ function renderizarTabelaTecnicos() {
   const corpo = document.getElementById("corpo-tabela-tecnicos");
   corpo.innerHTML = "";
   if (tecnicos.length === 0) {
-    corpo.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--texto-secundario);">Nenhum MrDeskPro cadastrado.</td></tr>';
+    corpo.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--texto-secundario);">Nenhum MRDeskPro cadastrado.</td></tr>';
     return;
   }
   tecnicos.forEach(t => {
@@ -2005,13 +2005,13 @@ function abrirModalTecnico(t) {
   document.getElementById("erro-modal-tecnico").style.display = "none";
   document.getElementById("form-tecnico").reset();
   if (t) {
-    document.getElementById("titulo-modal-tecnico").textContent = "Editar MrDeskPro";
+    document.getElementById("titulo-modal-tecnico").textContent = "Editar MRDeskPro";
     document.getElementById("tecnico-dispositivo-original").value = t.dispositivo;
     document.getElementById("tecnico-dispositivo").value = formatarId(t.dispositivo);
     document.getElementById("tecnico-descricao").value = t.descricao || "";
     document.getElementById("tecnico-ativo").checked = t.ativo === "S";
   } else {
-    document.getElementById("titulo-modal-tecnico").textContent = "Novo MrDeskPro";
+    document.getElementById("titulo-modal-tecnico").textContent = "Novo MRDeskPro";
     document.getElementById("tecnico-dispositivo-original").value = "";
     document.getElementById("tecnico-ativo").checked = true;
   }

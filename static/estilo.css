@@ -165,6 +165,7 @@
   .data-centralizada { text-align: center; color: var(--texto-secundario); font-size: 13px; }
 
   .col-status-conectar { width: 56px; }
+  th.col-status-conectar input { width: auto; margin: 0; cursor: pointer; }
   .status-conectar-wrap { display: flex; align-items: center; gap: 8px; }
   .bolinha-status {
     display: inline-block; width: 12px; height: 12px; border-radius: 50%;
@@ -189,6 +190,7 @@
   td.col-desatualizado span { cursor: help; }
   /* Versão do ERP (item 30): amarela quando menor que a mínima configurada */
   td.col-versao { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.col-versao.versao-antiga span:empty::before { content: "sem versão"; font-weight: 500; }
   td.col-versao.versao-antiga span { background: #fde68a; color: #713f12; border-radius: 6px; padding: 2px 7px; font-weight: 600; cursor: help; }
   .ajuda-configuracoes { font-size: 12px; color: var(--texto-secundario); margin-top: 8px; line-height: 1.4; }
   .acoes-linha button { background: none; border: none; cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 6px; color: var(--texto-secundario); }

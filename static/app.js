@@ -142,11 +142,42 @@ const CHAVE_VERSAO_MINIMA = "mrdesk_versao_minima_erp";
 function lerVersaoMinima() {
   try { return localStorage.getItem(CHAVE_VERSAO_MINIMA) || ""; } catch (_) { return ""; }
 }
+// Quem não tem versão conhecida conta como abaixo da mínima.
 function versaoAbaixoDaMinima(versao) {
   const minima = lerVersaoMinima();
-  if (!versao || !minima || !versaoValida(versao) || !versaoValida(minima)) return false;
+  if (!minima || !versaoValida(minima)) return false;
+  if (!versao) return true;
+  if (!versaoValida(versao)) return false;
   return compararVersoes(versao, minima) < 0;
 }
+// "Filtrar pela versão mínima": a lista mostra só os destacados em amarelo (neste navegador).
+const CHAVE_FILTRAR_MINIMA = "mrdesk_filtrar_versao_minima";
+function lerFiltrarMinima() {
+  try { return localStorage.getItem(CHAVE_FILTRAR_MINIMA) === "1"; } catch (_) { return false; }
+}
+// Filtro de on-line (checkbox de 3 estados no título da coluna de status):
+// "todos" (meio termo), "on" (marcado: só verdes), "off" (desmarcado: os que não estão verdes).
+const CHAVE_FILTRO_ONLINE = "mrdesk_filtro_online";
+let filtroOnline = "todos";
+try {
+  const salvo = localStorage.getItem(CHAVE_FILTRO_ONLINE);
+  if (salvo === "on" || salvo === "off") filtroOnline = salvo;
+} catch (_) {}
+function mostrarFiltroOnline() {
+  const caixa = document.getElementById("check-online");
+  caixa.indeterminate = filtroOnline === "todos";
+  caixa.checked = filtroOnline === "on";
+  caixa.title = filtroOnline === "on" ? "Só on-line (clique para ver só off-line)"
+    : filtroOnline === "off" ? "Só off-line (clique para ver todos)"
+    : "Todos (clique para ver só on-line)";
+}
+mostrarFiltroOnline();
+document.getElementById("check-online").addEventListener("click", () => {
+  filtroOnline = filtroOnline === "todos" ? "on" : filtroOnline === "on" ? "off" : "todos";
+  try { localStorage.setItem(CHAVE_FILTRO_ONLINE, filtroOnline); } catch (_) {}
+  mostrarFiltroOnline();
+  renderizarTabela();
+});
 
 // Coluna Sistema (01/10): o MRDesk manda "windows / Windows 10 Pro - 10.0.19045";
 // na coluna mostra so "Windows 10 Pro"; o hint traz o resto.
@@ -532,6 +563,7 @@ document.getElementById("btn-alterar-senha").addEventListener("click", () => {
 document.getElementById("btn-configuracoes").addEventListener("click", () => {
   document.getElementById("erro-configuracoes").style.display = "none";
   document.getElementById("config-versao-minima").value = lerVersaoMinima();
+  document.getElementById("config-filtrar-minima").checked = lerFiltrarMinima();
   document.getElementById("overlay-configuracoes").style.display = "flex";
   document.getElementById("config-versao-minima").focus();
 });
@@ -551,6 +583,8 @@ document.getElementById("form-configuracoes").addEventListener("submit", (e) => 
   try {
     if (valor) localStorage.setItem(CHAVE_VERSAO_MINIMA, valor);
     else localStorage.removeItem(CHAVE_VERSAO_MINIMA);
+    if (document.getElementById("config-filtrar-minima").checked) localStorage.setItem(CHAVE_FILTRAR_MINIMA, "1");
+    else localStorage.removeItem(CHAVE_FILTRAR_MINIMA);
   } catch (_) {
     erroEl.textContent = "Este navegador não permitiu guardar a configuração.";
     erroEl.style.display = "block";
@@ -665,6 +699,22 @@ function renderizarComboCatalogos() {
   const sep2 = document.createElement("div");
   sep2.className = "combo-catalogo-separador";
   lista.appendChild(sep2);
+
+  // Só a conta da Sysrs: servidor sem MRDesk (ex.: Linux só com prompt) cadastrado à mão,
+  // pra controlar a versão do ERP. Fica separado por uma linha.
+  if (usuarioSysrs && usuarioAdmin && catalogoAtual) {
+    const adicionar = document.createElement("div");
+    adicionar.className = "combo-catalogo-item combo-catalogo-especial";
+    adicionar.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><span>Adicionar dispositivo</span>`;
+    adicionar.addEventListener("click", () => {
+      document.getElementById("combo-catalogo-lista").classList.remove("aberto");
+      abrirModalNovoDispositivo();
+    });
+    lista.appendChild(adicionar);
+    const sep3 = document.createElement("div");
+    sep3.className = "combo-catalogo-separador";
+    lista.appendChild(sep3);
+  }
 
   const novo = document.createElement("div");
   novo.className = "combo-catalogo-item combo-catalogo-especial";
@@ -914,7 +964,7 @@ function renderizarTabela() {
 
   // Cliente e apelido: a busca ignora acentos ("joao" acha "João")
   const termoSemAcento = semAcento(termo);
-  const filtrados = grupo
+  const porBusca = grupo
     ? dispositivos.filter(d => grupo.includes(d.id))
     : dispositivos.filter(d =>
         semAcento((d.cliente || "").toLowerCase()).includes(termoSemAcento) ||
@@ -923,6 +973,12 @@ function renderizarTabela() {
         // coluna Versão MR1 (só a conta da Sysrs tem): compara com o texto como foi digitado
         (d.versao_erp || "").toLowerCase().includes(termoBruto.trim())
       );
+  // Filtros do cabeçalho: on-line (verde ou não) e, só na Sysrs, versão mínima.
+  const filtrarMinima = usuarioSysrs && lerFiltrarMinima() && !!lerVersaoMinima();
+  const filtrados = porBusca.filter(d =>
+    (filtroOnline === "todos" || (filtroOnline === "on") === (d.online === true)) &&
+    (!filtrarMinima || versaoAbaixoDaMinima(d.versao_erp))
+  );
 
   const corpo = document.getElementById("corpo-tabela");
   corpo.innerHTML = "";
@@ -946,7 +1002,7 @@ function renderizarTabela() {
       <td class="col-status-conectar" style="${opacidadeConteudo}">
         <div class="status-conectar-wrap">
           <span class="bolinha-status ${statusClasse}" title="${statusClasse === 'online' ? 'On-line' : statusClasse === 'offline' ? 'Off-line' : 'Status desconhecido'}"></span>
-          <button class="btn-conectar-icone" title="Conectar" data-acao="conectar" data-id="${d.id}">${ICONE_CONECTAR}</button>
+          ${d.manual ? "" : `<button class="btn-conectar-icone" title="Conectar" data-acao="conectar" data-id="${d.id}">${ICONE_CONECTAR}</button>`}
         </div>
       </td>
       <td style="${opacidadeConteudo}">${escapeHtml(d.cliente || d.apelido)}</td>
@@ -958,9 +1014,9 @@ function renderizarTabela() {
       </td>
       <td class="col-desatualizado" style="${opacidadeConteudo}">${iconeDesatualizado(d)}</td>
       <td class="col-sistema" style="${opacidadeConteudo}" title="${escapeHtml(hintSistema(d))}">${escapeHtml(sistemaCurto(d.sistema))}</td>
-      <td class="col-versao${versaoAbaixoDaMinima(d.versao_erp) ? " versao-antiga" : ""}" style="${opacidadeConteudo}"><span${versaoAbaixoDaMinima(d.versao_erp) ? ` title="Abaixo da versão mínima (${escapeHtml(lerVersaoMinima())})"` : ""}>${escapeHtml(d.versao_erp || "")}</span></td>
+      <td class="col-versao${versaoAbaixoDaMinima(d.versao_erp) ? " versao-antiga" : ""}" style="${opacidadeConteudo}"><span${versaoAbaixoDaMinima(d.versao_erp) ? ` title="${d.versao_erp ? "Abaixo da versão mínima" : "Versão não conhecida"} (${escapeHtml(lerVersaoMinima())})"` : ""}>${escapeHtml(d.versao_erp || "")}</span></td>
       <td class="acoes-linha col-acoes-estreita">
-        <button title="Transferir arquivos" data-acao="arquivos" data-id="${d.id}">${ICONE_ARQUIVOS}</button>
+        ${d.manual ? "" : `<button title="Transferir arquivos" data-acao="arquivos" data-id="${d.id}">${ICONE_ARQUIVOS}</button>`}
         <button title="Mais ações" data-acao="menu" data-id="${d.id}">${ICONE_PONTOS}</button>
       </td>`;
     corpo.appendChild(tr);
@@ -1234,6 +1290,9 @@ document.getElementById("corpo-tabela").addEventListener("click", async (e) => {
     fecharMenuFlutuante();
     if (!jaAbertoParaEsseId) {
       idMenuAtual = id;
+      const devDoMenu = dispositivos.find(d => d.id === id);
+      document.getElementById("btn-menu-liberar-maquina").style.display =
+        (usuarioSysrs && !(devDoMenu && devDoMenu.manual)) ? "flex" : "none";
       const rect = btn.getBoundingClientRect();
       menu.style.display = "block";
       // Posiciona abaixo do botao; se nao couber embaixo, abre para cima
@@ -1564,9 +1623,29 @@ function fecharModalAuditoria() {
 document.getElementById("btn-cancelar-auditoria").addEventListener("click", fecharModalAuditoria);
 document.getElementById("btn-filtrar-auditoria").addEventListener("click", carregarAuditoria);
 
-// Só edição: o dispositivo entra na conta sozinho, no primeiro acesso de um técnico.
+// Edição de ficha. O dispositivo com MRDesk entra na conta sozinho, no primeiro acesso de um
+// técnico; só o servidor sem MRDesk (Sysrs) é cadastrado à mão (abrirModalNovoDispositivo).
+let modalNovoDispositivo = false;
+function mostrarCampoIdDoModal(mostrar) {
+  document.getElementById("rotulo-modal-id").style.display = mostrar ? "" : "none";
+  document.getElementById("modal-id").style.display = mostrar ? "" : "none";
+  document.getElementById("modal-id").required = mostrar;
+}
+function abrirModalNovoDispositivo() {
+  modalNovoDispositivo = true;
+  document.getElementById("titulo-modal").textContent = "Novo dispositivo sem MRDesk";
+  document.getElementById("erro-modal").style.display = "none";
+  document.getElementById("form-modal").reset();
+  mostrarCampoIdDoModal(false);
+  document.getElementById("modal-id-original").value = "";
+  document.getElementById("overlay").style.display = "flex";
+  document.getElementById("modal-cliente").focus();
+}
 function abrirModal(dev) {
   if (!dev) return;
+  modalNovoDispositivo = false;
+  document.getElementById("titulo-modal").textContent = "Editar dispositivo";
+  mostrarCampoIdDoModal(true);
   document.getElementById("erro-modal").style.display = "none";
   document.getElementById("form-modal").reset();
   document.getElementById("modal-id-original").value = dev.id;
@@ -1604,10 +1683,15 @@ document.getElementById("form-modal").addEventListener("submit", async (e) => {
   erroEl.style.display = "none";
 
   try {
-    const resp = await fetch(`${API}/devices/${idOriginal}`, {
-      method: "PUT", headers: headersAuth(),
-      body: JSON.stringify({ apelido, cliente, ativo, servidor })
-    });
+    const resp = modalNovoDispositivo
+      ? await fetch(`${API}/devices`, {
+          method: "POST", headers: headersAuth(),
+          body: JSON.stringify({ apelido, cliente, ativo, servidor, catalogo: catalogoAtual.catalogo })
+        })
+      : await fetch(`${API}/devices/${idOriginal}`, {
+          method: "PUT", headers: headersAuth(),
+          body: JSON.stringify({ apelido, cliente, ativo, servidor })
+        });
     const data = await resp.json();
     if (data.success) {
       fecharModal();

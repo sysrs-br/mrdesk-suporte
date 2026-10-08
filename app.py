@@ -1223,6 +1223,67 @@ def edit_catalogo(catalogo_id):
 
 
 # ------------------------------------------------------------
+# DISPOSITIVO CADASTRADO A MAO - so a conta da Sysrs
+# ------------------------------------------------------------
+# Servidor sem o MRDesk (ex.: Linux so com prompt) que precisa existir na lista
+# pra controlar a versao do ERP. Ganha um ID inventado de 1 a 999 (o MRDesk
+# real tem 9 digitos), nunca recebe conexao e fica sempre no fim da lista.
+# Nao precisa de coluna nova: "manual" = ID de 1 a 3 digitos.
+def _id_manual(device_id):
+    return bool(device_id) and device_id.isdigit() and len(device_id) <= 3
+
+
+@app.route("/api/devices", methods=["POST"])
+@require_auth
+@require_admin_empresa
+@require_sysrs
+def add_device_manual():
+    data = request.get_json(force=True, silent=True) or {}
+    cliente = (data.get("cliente") or "").strip() or None
+    apelido = (data.get("apelido") or "").strip()
+    servidor = "S" if data.get("servidor") == "S" else "N"
+    ativo = "N" if data.get("ativo") == "N" else "S"
+    try:
+        catalogo = int(data.get("catalogo"))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Catalogo e obrigatorio"}), 400
+    if not apelido:
+        return jsonify({"success": False, "error": "Informe o apelido"}), 400
+    if len(apelido) > 100 or (cliente and len(cliente) > 100):
+        return jsonify({"success": False, "error": "Cliente e apelido têm no máximo 100 caracteres"}), 400
+
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT 1 FROM catalogos WHERE conta = %s AND catalogo = %s", (request.usuario_id, catalogo))
+        if not cur.fetchone():
+            return jsonify({"success": False, "error": "Catalogo nao encontrado"}), 404
+        # proximo ID livre de 1 a 999
+        cur.execute(
+            "SELECT MIN(g) FROM generate_series(1, 999) g "
+            "WHERE NOT EXISTS (SELECT 1 FROM devices WHERE id = g::text)"
+        )
+        novo = cur.fetchone()[0]
+        if novo is None:
+            return jsonify({"success": False, "error": "Os IDs de 1 a 999 já estão todos em uso."}), 409
+        novo = str(novo)
+        cur.execute("INSERT INTO devices (id, instalado) VALUES (%s, 'N')", (novo,))
+        cur.execute(
+            "INSERT INTO devices_contas (dispositivo, conta, cliente, apelido, usuario, catalogo, ativo, servidor) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (novo, request.usuario_id, cliente, apelido, request.usuario_logado, catalogo, ativo, servidor)
+        )
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        return jsonify({"success": False, "error": "Não foi possível cadastrar. Tente de novo."}), 409
+    finally:
+        cur.close()
+        conn.close()
+    return jsonify({"success": True, "id": novo})
+
+
+# ------------------------------------------------------------
 # LISTAR dispositivos da conta
 # ------------------------------------------------------------
 @app.route("/api/devices", methods=["GET"])
@@ -1263,8 +1324,9 @@ def list_devices():
         # No catalogo "Novos" os filtros nao valem: e a caixa de entrada, mostra tudo o que chegou.
         "WHERE dc.conta = %s AND dc.catalogo = %s "
         "AND (%s OR (dc.ativo = %s AND dc.servidor = %s AND d.instalado = %s)) "
-        # cliente nulo: a ficha aparece pelo apelido
-        "ORDER BY COALESCE(dc.cliente, dc.apelido), dc.apelido",
+        # Dispositivo cadastrado a mao (sem MRDesk, ID de 1 a 3 digitos) vai pro fim da lista;
+        # dentro de cada grupo vale a ordem de sempre. Cliente nulo: a ficha aparece pelo apelido.
+        "ORDER BY (d.id ~ '^[0-9]{1,3}$'), COALESCE(dc.cliente, dc.apelido), dc.apelido",
         (request.usuario_sysrs, request.usuario_id, catalogo, catalogo == CATALOGO_NOVOS,
          filtro_ativo, filtro_servidor, filtro_instalado)
     )
@@ -1286,6 +1348,7 @@ def list_devices():
         online = None
         if row["segundos_sem_sinal"] is not None:
             online = float(row["segundos_sem_sinal"]) <= LIMITE_ONLINE_SEGUNDOS
+        fake = _id_manual(row["id"])
         devices.append({
             "id": row["id"],
             "cliente": row["cliente"],
@@ -1293,9 +1356,11 @@ def list_devices():
             "observacao": row["observacao"],
             "sistema": row["sistema"],
             "versao": row["versao"],
+            # cadastrado a mao (servidor Linux sem MRDesk): nunca recebe conexao
+            "manual": fake,
             # sem versao conhecida (maquina que nao deu sinal desde que a coluna
-            # existe) conta como desatualizada
-            "desatualizado": bool(versao_publicada and (not row["versao"]
+            # existe) conta como desatualizada - menos o cadastrado a mao, que nao tem MRDesk
+            "desatualizado": bool(not fake and versao_publicada and (not row["versao"]
                                   or _versao_menor(row["versao"], versao_publicada))),
             "versao_erp": row["versao_erp"],
             "memoria": row["memoria"],
@@ -1795,8 +1860,17 @@ def delete_device(device_id):
     cur = conn.cursor()
     cur.execute("DELETE FROM devices_contas WHERE dispositivo = %s AND conta = %s",
                 (device_id, request.usuario_id))
-    conn.commit()
     deleted = cur.rowcount
+    conn.commit()
+    # Cadastrado a mao (ID de 1 a 3 digitos): sem MRDesk, nao volta sozinho. Solta a licenca e
+    # apaga o dispositivo pra liberar o ID; se tiver historico preso a ele, o dispositivo fica.
+    if deleted and _id_manual(device_id):
+        try:
+            cur.execute("UPDATE licencas SET id_mrdesk = NULL WHERE id_mrdesk = %s", (device_id,))
+            cur.execute("DELETE FROM devices WHERE id = %s", (device_id,))
+            conn.commit()
+        except psycopg2.Error:
+            conn.rollback()
     cur.close()
     conn.close()
 

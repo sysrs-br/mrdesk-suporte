@@ -150,7 +150,7 @@
       <table>
         <thead>
           <tr>
-            <th class="col-status-conectar"></th>
+            <th class="col-status-conectar"><input type="checkbox" id="check-online" title="Filtro de on-line"></th>
             <th>Cliente</th>
             <th>Apelido</th>
             <th style="text-align:right;">ID</th>
@@ -175,7 +175,7 @@
     <h2 id="titulo-modal">Editar dispositivo</h2>
     <form id="form-modal">
       <input type="hidden" id="modal-id-original">
-      <label>ID do MRDesk</label>
+      <label id="rotulo-modal-id">ID do MRDesk</label>
       <input type="text" id="modal-id" style="text-align:left;font-family:monospace;" required>
       <label>Cliente</label>
       <input type="text" id="modal-cliente" maxlength="100">
@@ -453,7 +453,11 @@
     <form id="form-configuracoes">
       <label>Versão mínima do ERP</label>
       <input type="text" id="config-versao-minima" maxlength="15" inputmode="decimal" placeholder="ex.: 21.8.0.1" autocomplete="off">
-      <div class="ajuda-configuracoes">Na lista, a versão menor que esta fica amarela. Deixe vazio para não destacar. Vale só neste navegador.</div>
+      <div class="ajuda-configuracoes">Na lista, a versão menor que esta fica amarela (quem não tem versão conhecida também). Deixe vazio para não destacar. Vale só neste navegador.</div>
+      <label class="check-label" style="margin-top:12px;" title="Mostra na lista só os dispositivos destacados em amarelo, junto com os outros filtros">
+        <input type="checkbox" id="config-filtrar-minima">
+        Filtrar pela versão mínima
+      </label>
       <div id="erro-configuracoes"></div>
       <div class="rodape-modal">
         <button type="button" class="btn-cancelar" id="btn-cancelar-configuracoes">Cancelar</button>

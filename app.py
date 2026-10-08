@@ -1267,7 +1267,8 @@ def add_device_manual():
         if novo is None:
             return jsonify({"success": False, "error": "Os IDs de 1 a 999 já estão todos em uso."}), 409
         novo = str(novo)
-        cur.execute("INSERT INTO devices (id, instalado) VALUES (%s, 'N')", (novo,))
+        # instalado = 'S' pra obedecer o filtro Instalado como qualquer outro dispositivo
+        cur.execute("INSERT INTO devices (id, instalado) VALUES (%s, 'S')", (novo,))
         cur.execute(
             "INSERT INTO devices_contas (dispositivo, conta, cliente, apelido, usuario, catalogo, ativo, servidor) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
@@ -1295,11 +1296,12 @@ def list_devices():
     filtro_servidor = request.args.get("servidor", "N")
     filtro_instalado = request.args.get("instalado", "S")
 
-    if filtro_ativo not in ("S", "N"):
+    # S = so os que sim, N = so os que nao, T = todos (filtro nao aplicado)
+    if filtro_ativo not in ("S", "N", "T"):
         filtro_ativo = "S"
-    if filtro_servidor not in ("S", "N"):
+    if filtro_servidor not in ("S", "N", "T"):
         filtro_servidor = "N"
-    if filtro_instalado not in ("S", "N"):
+    if filtro_instalado not in ("S", "N", "T"):
         filtro_instalado = "S"
 
     try:
@@ -1323,12 +1325,13 @@ def list_devices():
         "LEFT JOIN licencas l ON l.id_mrdesk = d.id "
         # No catalogo "Novos" os filtros nao valem: e a caixa de entrada, mostra tudo o que chegou.
         "WHERE dc.conta = %s AND dc.catalogo = %s "
-        "AND (%s OR (dc.ativo = %s AND dc.servidor = %s AND d.instalado = %s)) "
+        "AND (%s OR ((%s = 'T' OR dc.ativo = %s) AND (%s = 'T' OR dc.servidor = %s) "
+        "AND (%s = 'T' OR d.instalado = %s))) "
         # Dispositivo cadastrado a mao (sem MRDesk, ID de 1 a 3 digitos) vai pro fim da lista;
         # dentro de cada grupo vale a ordem de sempre. Cliente nulo: a ficha aparece pelo apelido.
         "ORDER BY (d.id ~ '^[0-9]{1,3}$'), COALESCE(dc.cliente, dc.apelido), dc.apelido",
         (request.usuario_sysrs, request.usuario_id, catalogo, catalogo == CATALOGO_NOVOS,
-         filtro_ativo, filtro_servidor, filtro_instalado)
+         filtro_ativo, filtro_ativo, filtro_servidor, filtro_servidor, filtro_instalado, filtro_instalado)
     )
     rows = cur.fetchall()
     cur.close()

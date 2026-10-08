@@ -340,18 +340,30 @@ function mostrarLogin() {
   document.getElementById("login-senha").value = "";
 }
 
-const filtroAtivosSalvo = localStorage.getItem("mrdesk_filtro_ativos");
-const filtroServidorSalvo = localStorage.getItem("mrdesk_filtro_servidor");
-const filtroInstaladoSalvo = localStorage.getItem("mrdesk_filtro_instalado");
-if (filtroAtivosSalvo !== null) {
-  document.getElementById("check-ativos").checked = filtroAtivosSalvo === "1";
+// Ativo, Instalado e Servidor: caixas de 3 estados. Marcado = "S" (só os que sim),
+// desmarcado = "N" (só os que não), meio termo = "T" (todos, o filtro não é aplicado).
+// Clique: meio termo -> marcado -> desmarcado -> meio termo. Guardado neste navegador
+// (valores antigos "1"/"0" valem como marcado/desmarcado; sem nada guardado = meio termo).
+const FILTROS_TRES_ESTADOS = {
+  "check-ativos": { chave: "mrdesk_filtro_ativos", estado: "T" },
+  "check-instalado": { chave: "mrdesk_filtro_instalado", estado: "T" },
+  "check-servidor": { chave: "mrdesk_filtro_servidor", estado: "T" },
+};
+function mostrarFiltroTresEstados(id) {
+  const caixa = document.getElementById(id);
+  const estado = FILTROS_TRES_ESTADOS[id].estado;
+  caixa.indeterminate = estado === "T";
+  caixa.checked = estado === "S";
 }
-if (filtroServidorSalvo !== null) {
-  document.getElementById("check-servidor").checked = filtroServidorSalvo === "1";
-}
-if (filtroInstaladoSalvo !== null) {
-  document.getElementById("check-instalado").checked = filtroInstaladoSalvo === "1";
-}
+Object.entries(FILTROS_TRES_ESTADOS).forEach(([id, f]) => {
+  try {
+    const salvo = localStorage.getItem(f.chave);
+    if (salvo === "1" || salvo === "S") f.estado = "S";
+    else if (salvo === "0" || salvo === "N") f.estado = "N";
+  } catch (_) {}
+  mostrarFiltroTresEstados(id);
+});
+function estadoDoFiltro(id) { return FILTROS_TRES_ESTADOS[id].estado; }
 
 // Link de senha recebido por e-mail: https://.../?senha=<código>
 const codigoLinkSenha = new URLSearchParams(location.search).get("senha");
@@ -872,9 +884,9 @@ async function carregarDispositivos(silencioso = false) {
   const caixa = document.querySelector("#area-dispositivos > .tabela-wrapper");
   const rolagem = caixa ? caixa.scrollTop : 0;
   try {
-    const filtroAtivo = document.getElementById("check-ativos").checked ? "S" : "N";
-    const filtroServidor = document.getElementById("check-servidor").checked ? "S" : "N";
-    const filtroInstalado = document.getElementById("check-instalado").checked ? "S" : "N";
+    const filtroAtivo = estadoDoFiltro("check-ativos");
+    const filtroServidor = estadoDoFiltro("check-servidor");
+    const filtroInstalado = estadoDoFiltro("check-instalado");
     const resp = await fetch(
       `${API}/devices?catalogo=${catalogoAtual.catalogo}&ativo=${filtroAtivo}&servidor=${filtroServidor}&instalado=${filtroInstalado}`,
       { headers: headersAuth() }
@@ -929,17 +941,14 @@ setInterval(() => {
   carregarDispositivos(true);
 }, ATUALIZAR_LISTA_MS);
 
-document.getElementById("check-ativos").addEventListener("change", (e) => {
-  localStorage.setItem("mrdesk_filtro_ativos", e.target.checked ? "1" : "0");
-  carregarDispositivos();
-});
-document.getElementById("check-servidor").addEventListener("change", (e) => {
-  localStorage.setItem("mrdesk_filtro_servidor", e.target.checked ? "1" : "0");
-  carregarDispositivos();
-});
-document.getElementById("check-instalado").addEventListener("change", (e) => {
-  localStorage.setItem("mrdesk_filtro_instalado", e.target.checked ? "1" : "0");
-  carregarDispositivos();
+Object.keys(FILTROS_TRES_ESTADOS).forEach(id => {
+  document.getElementById(id).addEventListener("click", () => {
+    const f = FILTROS_TRES_ESTADOS[id];
+    f.estado = f.estado === "T" ? "S" : f.estado === "S" ? "N" : "T";
+    try { localStorage.setItem(f.chave, f.estado); } catch (_) {}
+    mostrarFiltroTresEstados(id);
+    carregarDispositivos();
+  });
 });
 
 // Sem cliente informado, o dispositivo é identificado só pelo apelido.
@@ -1065,9 +1074,9 @@ function atualizarBotaoAcessar(idDigitado, filtrados) {
 
 function motivosOcultacao(dev) {
   const motivos = [];
-  const filtroAtivo = document.getElementById("check-ativos").checked ? "S" : "N";
-  const filtroInstalado = document.getElementById("check-instalado").checked ? "S" : "N";
-  const filtroServidor = document.getElementById("check-servidor").checked ? "S" : "N";
+  const filtroAtivo = estadoDoFiltro("check-ativos");
+  const filtroInstalado = estadoDoFiltro("check-instalado");
+  const filtroServidor = estadoDoFiltro("check-servidor");
 
   if (!catalogoAtual || String(dev.catalogo) !== String(catalogoAtual.catalogo)) {
     motivos.push(`está no catálogo "${dev.catalogo_nome || dev.catalogo}"`);
@@ -1075,13 +1084,13 @@ function motivosOcultacao(dev) {
   // No catálogo "Novos" os filtros não escondem nada
   const novos = catalogos.find(c => c.fixo);
   if (novos && String(dev.catalogo) === String(novos.catalogo)) return motivos;
-  if ((dev.ativo || "S") !== filtroAtivo) {
+  if (filtroAtivo !== "T" && (dev.ativo || "S") !== filtroAtivo) {
     motivos.push(dev.ativo === "N" ? "está inativo" : "está ativo");
   }
-  if ((dev.instalado || "S") !== filtroInstalado) {
+  if (filtroInstalado !== "T" && (dev.instalado || "S") !== filtroInstalado) {
     motivos.push(dev.instalado === "N" ? "não está instalado" : "está instalado");
   }
-  if ((dev.servidor || "N") !== filtroServidor) {
+  if (filtroServidor !== "T" && (dev.servidor || "N") !== filtroServidor) {
     motivos.push(dev.servidor === "S" ? "é servidor" : "não é servidor");
   }
   return motivos;

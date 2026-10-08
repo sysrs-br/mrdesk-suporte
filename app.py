@@ -3,7 +3,7 @@
 #  Sysrs Tecnologia da Informacao
 # ============================================================
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 import psycopg2
 import psycopg2.extras
 import bcrypt
@@ -23,7 +23,11 @@ import config
 app = Flask(__name__)
 serializer = URLSafeTimedSerializer(config.APP_SECRET_KEY)
 
-TOKEN_MAX_AGE = 60 * 60 * 12  # 12 horas
+# Login do painel: vale 7 dias SEM USO. Enquanto o painel e usado, o servidor
+# devolve um token novo (cabecalho X-Novo-Token) quando o atual tem mais de
+# TOKEN_RENOVAR segundos, e o prazo recomeca (decisao do Celso, 08/10/2026).
+TOKEN_MAX_AGE = 60 * 60 * 24 * 7  # 7 dias
+TOKEN_RENOVAR = 60 * 60  # renova quando o token tem mais de 1 hora
 
 # ------------------------------------------------------------
 # ATUALIZACAO AUTOMATICA DO CLIENTE MRDESK
@@ -255,7 +259,15 @@ def require_auth(f):
         request.usuario_admin = True
         request.usuario_super = user["master"] is None
         request.usuario_sysrs = user["usuario"] == CONTA_SYSRS
-        return f(*args, **kwargs)
+        resposta = f(*args, **kwargs)
+        # Renova o login enquanto o painel esta em uso (prazo de 7 dias recomeca).
+        if time.time() - emitido.timestamp() > TOKEN_RENOVAR:
+            try:
+                resposta = make_response(resposta)
+                resposta.headers["X-Novo-Token"] = gerar_token(user["usuario"])
+            except Exception:
+                app.logger.exception("Falha ao renovar o token do painel")
+        return resposta
     return decorated
 
 

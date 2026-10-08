@@ -53,6 +53,21 @@ document.querySelectorAll('input[type="password"]').forEach(campo => {
   });
 });
 
+// Login renovado pelo servidor enquanto o painel e usado (vale 7 dias sem uso):
+// toda resposta pode trazer um token novo no cabecalho X-Novo-Token.
+const fetchOriginal = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const resp = await fetchOriginal(...args);
+  try {
+    const novo = resp.headers.get("X-Novo-Token");
+    if (novo && token) {
+      token = novo;
+      localStorage.setItem("mrdesk_token", novo);
+    }
+  } catch (e) { /* ignora */ }
+  return resp;
+};
+
 function headersAuth() {
   return { "Authorization": "Bearer " + token, "Content-Type": "application/json" };
 }
